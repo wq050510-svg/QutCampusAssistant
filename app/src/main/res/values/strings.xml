@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">青理助手</string>
+    <string name="widget_name">今日课表(极简透明)</string>
+    <string name="widget_description">青岛理工大学课表桌面小组件，展示今日课程与下节课提醒</string>
+    <string name="no_courses_today">今天没有课哦</string>
+    <string name="campus_huangdao">黄岛校区</string>
+    <string name="campus_shibei">市北校区</string>
+    <string name="campus_linyi">临沂校区</string>
+</resources>

@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent"
+    android:orientation="vertical"
+    android:paddingStart="16dp"
+    android:paddingTop="12dp"
+    android:paddingEnd="16dp"
+    android:paddingBottom="12dp">
+
+    <!-- 顶栏：日期与周次信息 + 切换按钮 -->
+    <RelativeLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <LinearLayout
+            android:id="@+id/layout_widget_header_left"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentStart="true"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tv_widget_date"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:shadowColor="#80000000"
+                android:shadowDx="1"
+                android:shadowDy="2"
+                android:shadowRadius="4"
+                android:text="2026/9/20"
+                android:textColor="#FFFFFFFF"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_widget_sub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:shadowColor="#80000000"
+                android:shadowDx="1"
+                android:shadowDy="1"
+                android:shadowRadius="3"
+                android:text="大四上 | 第3周 周日"
+                android:textColor="#E6FFFFFF"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/btn_widget_toggle_day"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentEnd="true"
+            android:layout_centerVertical="true"
+            android:padding="8dp"
+            android:shadowColor="#80000000"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="3"
+            android:text="明日 →"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp" />
+    </RelativeLayout>
+
+    <!-- 中间状态：无课时的文具手绘插画状态 -->
+    <LinearLayout
+        android:id="@+id/layout_empty_state"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="visible">
+
+        <ImageView
+            android:id="@+id/iv_empty_icon"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:contentDescription="无课插画"
+            android:src="@drawable/ic_schedule_empty" />
+
+        <TextView
+            android:id="@+id/tv_empty_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:shadowColor="#80000000"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="3"
+            android:text="今天没有课哦"
+            android:textColor="#E6FFFFFF"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- 中间状态：有课时的课程流列表状态 -->
+    <LinearLayout
+        android:id="@+id/layout_courses_state"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <!-- 当前/下一节课卡片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#26FFFFFF"
+            android:orientation="horizontal"
+            android:padding="8dp">
+
+            <TextView
+                android:id="@+id/tv_course1_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:shadowColor="#80000000"
+                android:shadowRadius="2"
+                android:text="08:00\n09:50"
+                android:textColor="#FFFFFFFF"
+                android:textSize="11sp" />
+
+            <ImageView
+                android:layout_width="2dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:background="#80FFFFFF" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tv_course1_title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:shadowColor="#80000000"
+                    android:shadowRadius="3"
+                    android:text="建筑制图"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_course1_desc"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:shadowColor="#80000000"
+                    android:shadowRadius="2"
+                    android:text="黄岛校区-B203 | 郑杰"
+                    android:textColor="#E6FFFFFF"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 第二节课卡片 -->
+        <LinearLayout
+            android:id="@+id/layout_course2"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="#1AFFFFFF"
+            android:orientation="horizontal"
+            android:padding="6dp">
+
+            <TextView
+                android:id="@+id/tv_course2_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:shadowColor="#80000000"
+                android:shadowRadius="2"
+                android:text="14:00"
+                android:textColor="#E6FFFFFF"
+                android:textSize="11sp" />
+
+            <ImageView
+                android:layout_width="2dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:background="#40FFFFFF" />
+
+            <TextView
+                android:id="@+id/tv_course2_info"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:shadowColor="#80000000"
+                android:shadowRadius="2"
+                android:text="结构力学A上 | B524"
+                android:textColor="#E6FFFFFF"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

@@ -1,0 +1,63 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <!-- Pink Notebook (粉色斜靠笔记本) -->
+    <path
+        android:fillColor="#F8BBD0"
+        android:pathData="M24,20 L58,16 C60,16 62,18 62,20 L56,76 C56,78 54,80 52,80 L18,84 C16,84 14,82 14,80 L20,24 C20,22 22,20 24,20 Z" />
+    <path
+        android:fillColor="#F48FB1"
+        android:pathData="M24,20 L28,19.5 L24,79.5 L20,80 Z" />
+
+    <!-- White Paper with lines (浅蓝色线横格纸) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,24 L74,28 C76,28 78,30 78,32 L72,84 C72,86 70,88 68,88 L30,84 C28,84 26,82 26,80 L32,28 C32,26 34,24 36,24 Z" />
+    <!-- Blue note lines -->
+    <path
+        android:strokeColor="#81D4FA"
+        android:strokeWidth="2"
+        android:pathData="M36,36 L70,39 M35,44 L69,47 M34,52 L68,55 M33,60 L67,63 M32,68 L66,71 M31,76 L65,79" />
+
+    <!-- Yellow Pencil (黄色倾斜铅笔) -->
+    <path
+        android:fillColor="#FFE082"
+        android:pathData="M42,12 L48,13 L42,42 L36,41 Z" />
+    <path
+        android:fillColor="#FFB300"
+        android:pathData="M42,12 L45,12.5 L39,41.5 L36,41 Z" />
+    <path
+        android:fillColor="#E0E0E0"
+        android:pathData="M42,12 L45,6 L48,13 Z" />
+    <path
+        android:fillColor="#424242"
+        android:pathData="M44,8 L45,6 L46,8.5 Z" />
+
+    <!-- Glasses (黑色复古眼镜) -->
+    <path
+        android:strokeColor="#212121"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:fillColor="#40FFFFFF"
+        android:pathData="M42,50 C42,44 49,43 53,46 C57,49 57,56 52,58 C47,60 42,56 42,50 Z" />
+    <path
+        android:strokeColor="#212121"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:fillColor="#40FFFFFF"
+        android:pathData="M59,53 C59,47 66,46 70,49 C74,52 74,59 69,61 C64,63 59,59 59,53 Z" />
+    <!-- Glasses Bridge -->
+    <path
+        android:strokeColor="#212121"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M53,49 C55,47 57,47 59,50" />
+    <!-- Glasses Arms (镜腿) -->
+    <path
+        android:strokeColor="#212121"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M42,48 L36,43 M70,52 L76,47" />
+</vector>
