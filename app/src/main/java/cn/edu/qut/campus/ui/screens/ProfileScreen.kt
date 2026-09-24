@@ -634,8 +634,8 @@ fun ProfileScreen(
                                             color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                         )
                                         Text(
-                                            text = if (cName == "黄岛校区") "西海岸新区主校区 (嘉陵江东路/长江路)" else "抚顺路老校区 (建筑与城乡规划/土木等学院)",
-                                            fontSize = 11.sp,
+                                            text = if (cName == "黄岛校区") "嘉陵江东路" else "抚顺路",
+                                            fontSize = 12.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
