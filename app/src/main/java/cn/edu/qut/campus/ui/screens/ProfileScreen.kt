@@ -49,6 +49,15 @@ fun ProfileScreen(
     var currentCampus by remember { mutableStateOf(prefs.campus.ifEmpty { "黄岛校区" }) }
     var showCampusDialog by remember { mutableStateOf(false) }
 
+    val appVersionName = remember {
+        try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            "v${pInfo.versionName} 正式版"
+        } catch (e: Exception) {
+            "v1.1.0 正式版"
+        }
+    }
+
     // 全量同步教务处数据
     fun syncAllData() {
         coroutineScope.launch {
@@ -525,7 +534,7 @@ fun ProfileScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("应用版本", style = MaterialTheme.typography.bodyMedium)
-                        Text("v1.2.0 正式版", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(appVersionName, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
