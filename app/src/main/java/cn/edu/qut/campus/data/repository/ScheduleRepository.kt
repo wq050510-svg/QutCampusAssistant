@@ -24,7 +24,7 @@ class ScheduleRepository(
     private val app: QutApplication = QutApplication.instance
 ) {
     private val db = app.database
-    private val prefs = app.preferences
+    val prefs = app.preferences
     private val gson = Gson()
 
     val coursesFlow: Flow<List<Course>> = db.courseDao().getAllCourses().map { list ->

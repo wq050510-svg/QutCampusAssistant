@@ -77,7 +77,7 @@ fun LoginScreen(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "智能课表与校园助手 • 黄岛校区",
+                text = "智能课表与校园助手 • 青理双校区支持",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)

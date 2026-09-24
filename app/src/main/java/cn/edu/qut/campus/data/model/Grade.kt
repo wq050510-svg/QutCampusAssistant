@@ -14,7 +14,26 @@ data class Grade(
     val college: String = ""
 ) {
     val isPassed: Boolean
-        get() = gradePoint > 0.0 || scoreNumber >= 60.0 || score in listOf("及格", "中等", "良好", "优秀", "合格", "通过", "免修")
+        get() {
+            val s = score.trim()
+            if (s.isEmpty()) return false
+            // 明确的挂科、未通过、缺考或违纪关键字
+            val failKeywords = listOf("不及格", "不合格", "未通过", "缺考", "作弊", "违纪", "不达标", "缓考", "F")
+            if (failKeywords.any { s.contains(it, ignoreCase = true) }) {
+                return false
+            }
+            // 若为纯数字格式成绩
+            val num = scoreNumber
+            if (num > 0.0) {
+                return num >= 60.0
+            }
+            if (s == "0" || s == "0.0" || s == "00") {
+                return false
+            }
+            // 针对非数字中文字等级（如 合格、良好、中等、优秀、通过、及格、达标、免修、优、良、中 等）：
+            // 只要未变红（无挂科关键字且非零），均智能识别为考核通过
+            return true
+        }
 
     companion object {
         /**
@@ -29,10 +48,11 @@ data class Grade(
             for ((_, list) in grouped) {
                 val passedRecords = list.filter { it.isPassed }
                 if (passedRecords.isNotEmpty()) {
-                    // 提取通过记录中绩点最高或成绩最高的那条
+                    // 提取通过记录中成绩最高或重修通过的最新记录
                     val best = passedRecords.maxWithOrNull(
-                        compareBy<Grade> { it.gradePoint }
-                            .thenBy { it.scoreNumber }
+                        compareBy<Grade> { it.scoreNumber }
+                            .thenBy { it.examNature.contains("重修") }
+                            .thenBy { it.academicYear }
                     ) ?: passedRecords.first()
                     result.add(best)
                 } else {

@@ -24,6 +24,7 @@ import cn.edu.qut.campus.data.repository.ScheduleRepository
 fun ExamsScreen(repository: ScheduleRepository) {
     val exams by repository.examsFlow.collectAsState(initial = emptyList())
     var showFinishedExams by remember { mutableStateOf(false) }
+    val campus = remember { repository.prefs.campus.ifEmpty { "黄岛校区" } }
 
     // 过滤出未结束的考试
     val upcomingExams = remember(exams) {
@@ -41,7 +42,7 @@ fun ExamsScreen(repository: ScheduleRepository) {
                     Column {
                         Text("考试安排与座号", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text(
-                            text = if (upcomingExams.isEmpty()) "暂无未结束考试 • 黄岛校区" else "未结束考试: ${upcomingExams.size} 门 • 黄岛校区",
+                            text = if (upcomingExams.isEmpty()) "暂无未结束考试 • $campus" else "未结束考试: ${upcomingExams.size} 门 • $campus",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -95,7 +96,7 @@ fun ExamsScreen(repository: ScheduleRepository) {
                 }
             } else {
                 items(upcomingExams) { exam ->
-                    ExamCard(exam = exam, isFinished = false)
+                    ExamCard(exam = exam, isFinished = false, defaultCampus = campus)
                 }
             }
 
@@ -122,7 +123,7 @@ fun ExamsScreen(repository: ScheduleRepository) {
 
                 if (showFinishedExams) {
                     items(finishedExams) { exam ->
-                        ExamCard(exam = exam, isFinished = true)
+                        ExamCard(exam = exam, isFinished = true, defaultCampus = campus)
                     }
                 }
             }
@@ -131,7 +132,7 @@ fun ExamsScreen(repository: ScheduleRepository) {
 }
 
 @Composable
-fun ExamCard(exam: Exam, isFinished: Boolean) {
+fun ExamCard(exam: Exam, isFinished: Boolean, defaultCampus: String = "黄岛校区") {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -223,8 +224,15 @@ fun ExamCard(exam: Exam, isFinished: Boolean) {
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
+                val examCampus = if (exam.classroom.contains("市北")) "市北校区" else if (exam.classroom.contains("黄岛")) "黄岛校区" else defaultCampus
+                val cleanRoom = exam.classroom
+                    .replace("黄岛校区-", "")
+                    .replace("市北校区-", "")
+                    .replace("黄岛-", "")
+                    .replace("市北-", "")
+                    .trim()
                 Text(
-                    text = "考场：黄岛校区 ${exam.classroom} (座位号: ${exam.seatNumber})",
+                    text = "考场：$examCampus $cleanRoom (座位号: ${exam.seatNumber})",
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (isFinished) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface
                 )

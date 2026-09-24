@@ -228,7 +228,7 @@ fun AcademicScreen(repository: ScheduleRepository) {
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "黄岛校区 • 培养方案指导教学计划",
+                                text = "${prefs.campus.ifEmpty { "黄岛校区" }} • 培养方案指导教学计划",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

@@ -75,12 +75,6 @@ fun GradesScreen(repository: ScheduleRepository) {
         filteredGrades.filter { it.isPassed }.sumOf { it.credit }
     }
 
-    val gpa = remember(filteredGrades) {
-        val totalXf = filteredGrades.filter { it.credit > 0 }.sumOf { it.credit }
-        val totalJd = filteredGrades.filter { it.credit > 0 }.sumOf { it.credit * it.gradePoint }
-        if (totalXf > 0) totalJd / totalXf else 0.0
-    }
-
     val failedCount = remember(filteredGrades) {
         filteredGrades.count { !it.isPassed && it.credit > 0 }
     }
@@ -170,7 +164,7 @@ fun GradesScreen(repository: ScheduleRepository) {
                 }
             }
 
-            // GPA 与学分总览卡片
+            // 有效学分与待重修/补考总览卡片 (已去除自算绩点，专注有效学分与待补考)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -181,47 +175,40 @@ fun GradesScreen(repository: ScheduleRepository) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(18.dp),
                     horizontalArrangement = Arrangement.SpaceAround,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("计算绩点 (GPA)", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                        Text(
-                            text = String.format("%.2f", gpa),
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    VerticalDivider(
-                        modifier = Modifier
-                            .height(36.dp)
-                            .width(1.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                    )
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("已获有效学分", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("已获有效学分", fontSize = 13.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = String.format("%.1f", totalCredits),
-                            fontSize = 24.sp,
+                            fontSize = 28.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
+                        Text("考核通过科目累计", fontSize = 10.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
                     }
                     VerticalDivider(
                         modifier = Modifier
-                            .height(36.dp)
+                            .height(44.dp)
                             .width(1.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
                     )
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("待重修/补考", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("待重修 / 待补考", fontSize = 13.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "$failedCount",
-                            fontSize = 24.sp,
+                            text = if (failedCount == 0) "0 门" else "$failedCount 门",
+                            fontSize = 28.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (failedCount > 0) Color(0xFFD32F2F) else MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = if (failedCount == 0) "全部科目已通过" else "需关注补考/重修安排",
+                            fontSize = 10.sp,
+                            color = if (failedCount > 0) Color(0xFFD32F2F).copy(alpha = 0.8f) else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                         )
                     }
                 }
@@ -382,9 +369,9 @@ fun GradeItemCard(grade: Grade) {
                     color = if (grade.isPassed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                 )
                 Text(
-                    text = "绩点: ${grade.gradePoint}",
+                    text = if (grade.isPassed) "已获 ${grade.credit} 学分" else "未获学分",
                     fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (grade.isPassed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
                 )
             }
         }

@@ -46,6 +46,8 @@ fun ProfileScreen(
     var isSyncingAll by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showScheduleDetails by remember { mutableStateOf(false) }
+    var currentCampus by remember { mutableStateOf(prefs.campus.ifEmpty { "黄岛校区" }) }
+    var showCampusDialog by remember { mutableStateOf(false) }
 
     // 全量同步教务处数据
     fun syncAllData() {
@@ -199,15 +201,27 @@ fun ProfileScreen(
 
                         Surface(
                             shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                            modifier = Modifier.clickable { showCampusDialog = true }
                         ) {
-                            Text(
-                                text = prefs.campus.ifEmpty { "黄岛校区" },
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary,
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
+                            ) {
+                                Text(
+                                    text = currentCampus,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -293,14 +307,19 @@ fun ProfileScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text("当前校区与作息时间", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Text("黄岛校区 (B楼群作息)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("$currentCampus (点击展开作息)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        IconButton(onClick = { showScheduleDetails = !showScheduleDetails }) {
-                            Icon(
-                                imageVector = if (showScheduleDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = null
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { showCampusDialog = true }) {
+                                Text("切换校区", fontSize = 12.sp)
+                            }
+                            IconButton(onClick = { showScheduleDetails = !showScheduleDetails }) {
+                                Icon(
+                                    imageVector = if (showScheduleDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = null
+                                )
+                            }
                         }
                     }
 
@@ -571,6 +590,66 @@ fun ProfileScreen(
                 dismissButton = {
                     TextButton(onClick = { showLogoutDialog = false }) {
                         Text("取消")
+                    }
+                }
+            )
+        }
+
+        // 切换校区对话框
+        if (showCampusDialog) {
+            AlertDialog(
+                onDismissRequest = { showCampusDialog = false },
+                title = { Text("切换就读校区") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "选择您的就读校区，将自动联动课表、日历同步与考场地点信息：",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        listOf("黄岛校区", "市北校区").forEach { cName ->
+                            val isSelected = cName == currentCampus
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        prefs.campus = cName
+                                        currentCampus = cName
+                                        showCampusDialog = false
+                                        Toast.makeText(context, "已切换为 $cName", Toast.LENGTH_SHORT).show()
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = cName,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = if (cName == "黄岛校区") "西海岸新区主校区 (嘉陵江东路/长江路)" else "抚顺路老校区 (建筑与城乡规划/土木等学院)",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showCampusDialog = false }) {
+                        Text("关闭")
                     }
                 }
             )

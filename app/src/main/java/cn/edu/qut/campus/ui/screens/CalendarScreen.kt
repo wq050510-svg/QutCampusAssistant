@@ -37,6 +37,8 @@ fun CalendarScreen(
     var isSyncing by remember { mutableStateOf(false) }
     var syncResultMsg by remember { mutableStateOf<String?>(null) }
 
+    val campus = remember { repository.prefs.campus.ifEmpty { "黄岛校区" } }
+
     // 运行时日历权限请求器
     val calendarPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -47,10 +49,10 @@ fun CalendarScreen(
             scope.launch {
                 isSyncing = true
                 val courses = repository.coursesFlow.first()
-                val result = syncManager.syncCoursesToCalendar(courses, reminderMinutes = selectedReminderMinutes)
+                val result = syncManager.syncCoursesToCalendar(courses, reminderMinutes = selectedReminderMinutes, campus = campus)
                 isSyncing = false
                 syncResultMsg = if (result.isSuccess) {
-                    "同步成功！已将 ${result.getOrNull()} 节黄岛校区课程写入手机日历，并开启提前 ${selectedReminderMinutes} 分钟提醒！"
+                    "同步成功！已将 ${result.getOrNull()} 节${campus}课程写入手机日历，并开启提前 ${selectedReminderMinutes} 分钟提醒！"
                 } else {
                     "同步失败：${result.exceptionOrNull()?.message}"
                 }
@@ -127,7 +129,7 @@ fun CalendarScreen(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = "独立日历本隔离：将在日历中创建独立的【青岛理工大学(黄岛校区)课表】，随时可一键重写或清空，绝不污染您的个人私人日程。",
+                        text = "独立日历本隔离：将在日历中创建独立的【青岛理工大学(${campus})课表】，随时可一键重写或清空，绝不污染您的个人私人日程。",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -171,10 +173,10 @@ fun CalendarScreen(
                         scope.launch {
                             isSyncing = true
                             val courses = repository.coursesFlow.first()
-                            val result = syncManager.syncCoursesToCalendar(courses, reminderMinutes = selectedReminderMinutes)
+                            val result = syncManager.syncCoursesToCalendar(courses, reminderMinutes = selectedReminderMinutes, campus = campus)
                             isSyncing = false
                             syncResultMsg = if (result.isSuccess) {
-                                "同步成功！已将 ${result.getOrNull()} 节课程排入系统日历，设置提前 ${selectedReminderMinutes} 分钟提醒！"
+                                "同步成功！已将 ${result.getOrNull()} 节${campus}课程排入系统日历，设置提前 ${selectedReminderMinutes} 分钟提醒！"
                             } else {
                                 "同步失败：${result.exceptionOrNull()?.message}"
                             }
@@ -208,7 +210,7 @@ fun CalendarScreen(
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        syncManager.clearCalendar()
+                        syncManager.clearCalendar(campus)
                         syncResultMsg = "已成功清空系统日历中的青理课表日程"
                     }
                 },

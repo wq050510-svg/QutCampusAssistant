@@ -20,11 +20,11 @@ class CalendarSyncManager(private val context: Context) {
     companion object {
         private const val CALENDAR_ACCOUNT_NAME = "qut_schedule_calendar"
         private const val CALENDAR_ACCOUNT_TYPE = CalendarContract.ACCOUNT_TYPE_LOCAL
-        private const val CALENDAR_DISPLAY_NAME = "青岛理工大学(黄岛校区)课表"
     }
 
     // 获取或创建青岛理工专属日历账户
-    private fun getOrCreateCalendarId(): Long {
+    private fun getOrCreateCalendarId(campus: String = "黄岛校区"): Long {
+        val calendarDisplayName = "青岛理工大学($campus)课表"
         val uri = CalendarContract.Calendars.CONTENT_URI
         val projection = arrayOf(CalendarContract.Calendars._ID)
         val selection = "(${CalendarContract.Calendars.ACCOUNT_NAME} = ? AND ${CalendarContract.Calendars.ACCOUNT_TYPE} = ?)"
@@ -41,8 +41,8 @@ class CalendarSyncManager(private val context: Context) {
         val values = ContentValues().apply {
             put(CalendarContract.Calendars.ACCOUNT_NAME, CALENDAR_ACCOUNT_NAME)
             put(CalendarContract.Calendars.ACCOUNT_TYPE, CALENDAR_ACCOUNT_TYPE)
-            put(CalendarContract.Calendars.NAME, CALENDAR_DISPLAY_NAME)
-            put(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME, CALENDAR_DISPLAY_NAME)
+            put(CalendarContract.Calendars.NAME, calendarDisplayName)
+            put(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME, calendarDisplayName)
             put(CalendarContract.Calendars.CALENDAR_COLOR, 0xFF006494.toInt()) // 青岛理工蓝
             put(CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL, CalendarContract.Calendars.CAL_ACCESS_OWNER)
             put(CalendarContract.Calendars.OWNER_ACCOUNT, CALENDAR_ACCOUNT_NAME)
@@ -61,9 +61,9 @@ class CalendarSyncManager(private val context: Context) {
     }
 
     // 清空旧课表事件
-    suspend fun clearCalendar(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun clearCalendar(campus: String = "黄岛校区"): Boolean = withContext(Dispatchers.IO) {
         try {
-            val calId = getOrCreateCalendarId()
+            val calId = getOrCreateCalendarId(campus)
             if (calId != -1L) {
                 context.contentResolver.delete(
                     CalendarContract.Events.CONTENT_URI,
@@ -81,16 +81,17 @@ class CalendarSyncManager(private val context: Context) {
     suspend fun syncCoursesToCalendar(
         courses: List<Course>,
         termStartDate: String = "2026-08-31",
-        reminderMinutes: Int = 20
+        reminderMinutes: Int = 20,
+        campus: String = "黄岛校区"
     ): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            val calId = getOrCreateCalendarId()
+            val calId = getOrCreateCalendarId(campus)
             if (calId == -1L) {
                 return@withContext Result.failure(Exception("无法访问或创建系统日历账户"))
             }
 
             // 先安全抹除旧课程，避免重复
-            clearCalendar()
+            clearCalendar(campus)
 
             val baseStartDate = LocalDate.parse(termStartDate)
             var eventCount = 0
@@ -98,7 +99,7 @@ class CalendarSyncManager(private val context: Context) {
             for (course in courses) {
                 if (course.isPractice) continue // 实践环节不入定时日历
 
-                val (startTimeStr, endTimeStr) = CampusPeriod.getTimeRange(course.startPeriod, course.endPeriod)
+                val (startTimeStr, endTimeStr) = CampusPeriod.getTimeRange(course.startPeriod, course.endPeriod, campus)
                 val startParts = startTimeStr.split(":")
                 val endParts = endTimeStr.split(":")
 
@@ -125,7 +126,7 @@ class CalendarSyncManager(private val context: Context) {
                         put(CalendarContract.Events.EVENT_LOCATION, "${course.classroom} (${course.teacher})")
                         put(
                             CalendarContract.Events.DESCRIPTION,
-                            "校区：黄岛校区\n教室：${course.classroom}\n教师：${course.teacher}\n节次：第${course.startPeriod}-${course.endPeriod}节\n学分：${course.credit}"
+                            "校区：$campus\n教室：${course.classroom}\n教师：${course.teacher}\n节次：第${course.startPeriod}-${course.endPeriod}节\n学分：${course.credit}"
                         )
                         put(CalendarContract.Events.DTSTART, startMillis)
                         put(CalendarContract.Events.DTEND, endMillis)
