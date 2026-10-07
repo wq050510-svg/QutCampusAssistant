@@ -4,10 +4,19 @@
   跨零点后的及时刷新不依赖它：ScheduleWidgetProvider 通过清单里的
   android.intent.action.DATE_CHANGED / TIME_SET / TIMEZONE_CHANGED 接收系统广播，
   收到后把展示偏移重置为「今日」并重绘全部实例。
+  用户拖动改变尺寸则不依赖任何周期：AppWidgetProvider.onAppWidgetOptionsChanged
+  会立刻回调，按新的可用高度重算显示几门课。
+
+  minHeight 保持 120dp：真机实测（OnePlus PHB110 / 480dpi / ColorOS 桌面）
+  用户已添加的实例就是 250×120dp，调大它会让用户在 2 格高度下无法添加。
+  120dp 下按 ScheduleWidgetProvider.visibleRowsFor() 走「1 门课」档，可完整显示。
+  minResizeHeight 设为 40dp，允许用户把小组件压扁；压扁时行数自动降到 1 行。
+  resizeMode 已是 horizontal|vertical（dumpsys 显示 3），无需改动。
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="250dp"
     android:minHeight="120dp"
+    android:minResizeHeight="40dp"
     android:targetCellWidth="4"
     android:targetCellHeight="2"
     android:updatePeriodMillis="1800000"

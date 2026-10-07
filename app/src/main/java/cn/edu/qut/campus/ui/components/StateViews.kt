@@ -148,23 +148,3 @@ fun EmptyState(
         }
     }
 }
-
-/** 把底层异常翻译成学生看得懂、且知道下一步该做什么的提示 */
-fun readableSyncError(error: Throwable?): String {
-    val raw = error?.message.orEmpty()
-    return when {
-        raw.contains("Unable to resolve host", ignoreCase = true) ||
-            raw.contains("UnknownHost", ignoreCase = true) ->
-            "无法连接学校服务器，请确认已连接校园网或手机数据网络"
-        raw.contains("timeout", ignoreCase = true) ||
-            raw.contains("timed out", ignoreCase = true) ->
-            "连接学校服务器超时，请稍后重试"
-        raw.contains("Failed to connect", ignoreCase = true) ||
-            raw.contains("Connection refused", ignoreCase = true) ->
-            "网络连接被拒绝，可能是校园网需要重新认证"
-        raw.contains("401") || raw.contains("session", ignoreCase = true) ->
-            "登录状态已过期，请退出后重新登录"
-        raw.isBlank() -> "网络异常，请稍后重试"
-        else -> raw
-    }
-}

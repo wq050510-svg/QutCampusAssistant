@@ -1,7 +1,7 @@
 # 青理校园助手 (QUT Campus Assistant)
 > 专为青岛理工大学学生定制的现代化校园综合服务 App（支持 Android 8.0+ 及现代 Material You）
 
-当前版本：**v1.3.1**（versionCode 5）｜ 详见 [RELEASE_NOTES_v1.3.1.md](RELEASE_NOTES_v1.3.1.md) 与 [RELEASE_NOTES_v1.3.0.md](RELEASE_NOTES_v1.3.0.md)
+当前版本：**v1.3.2**（versionCode 6）｜ 详见 [RELEASE_NOTES_v1.3.2.md](RELEASE_NOTES_v1.3.2.md)（v1.3.1 / v1.3.0 见同目录发布日志）
 
 ---
 
@@ -76,6 +76,7 @@ QutCampusAssistant/
  │    └── proguard-rules.pro                 # R8 keep 规则（Gson/Room/AppWidget）
  ├── gradle/libs.versions.toml                # 统一依赖版本库
  ├── keystore.properties                      # 正式签名凭据（可选，已在 .gitignore 中）
+ ├── MANUAL_TEST_CHECKLIST.md                  # 小组件 / 系统日历联动的真机手测清单
  ├── build.gradle.kts / settings.gradle.kts
  └── gradle.properties                        # Gradle 性能与 R8 开关
 ```

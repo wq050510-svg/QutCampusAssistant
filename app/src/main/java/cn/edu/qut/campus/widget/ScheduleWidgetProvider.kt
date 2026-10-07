@@ -6,12 +6,14 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
 import cn.edu.qut.campus.QutApplication
 import cn.edu.qut.campus.R
 import cn.edu.qut.campus.data.model.CampusPeriod
+import cn.edu.qut.campus.data.model.Course
 import cn.edu.qut.campus.data.model.cleanClassroom
 import cn.edu.qut.campus.data.model.dayNameOf
 import cn.edu.qut.campus.ui.MainActivity
@@ -21,6 +23,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
+import kotlin.math.max
 
 class ScheduleWidgetProvider : AppWidgetProvider() {
 
@@ -46,11 +49,85 @@ class ScheduleWidgetProvider : AppWidgetProvider() {
         private const val REQ_REFRESH = 3
         private const val REQ_OPEN_APP = 4
 
+        /** 布局里预置的课程行（RemoteViews 不能动态添加 View，只能预置后按档位显隐） */
+        private val COURSE_ROWS = arrayOf(
+            CourseRowIds(R.id.layout_course1, R.id.tv_course1_time, R.id.tv_course1_title, R.id.tv_course1_desc),
+            CourseRowIds(R.id.layout_course2, R.id.tv_course2_time, R.id.tv_course2_title, R.id.tv_course2_desc),
+            CourseRowIds(R.id.layout_course3, R.id.tv_course3_time, R.id.tv_course3_title, R.id.tv_course3_desc)
+        )
+
+        /** 布局中固定的预算高度（dp），与 widget_schedule_layout.xml 一一对应，改动需同步注释 */
+        private const val ROOT_VERTICAL_PADDING_DP = 12 // paddingTop 6 + paddingBottom 6
+        private const val HEADER_HEIGHT_DP = 34 // layout_widget_header 的固定高度
+        private const val COURSE_AREA_TOP_PADDING_DP = 2 // layout_courses_state 的 paddingTop
+        private const val COURSE_ROW_HEIGHT_DP = 32 // 每行课程行 /「还有 N 门课」行的高度
+        private const val COURSE_ROW_GAP_DP = 3 // 行间距（只计一个间隔）
+
+        /** 除行本身以外，顶部区域占掉的固定高度 */
+        private const val FIXED_TOP_DP = ROOT_VERTICAL_PADDING_DP + HEADER_HEIGHT_DP + COURSE_AREA_TOP_PADDING_DP
+
+        /**
+         * 每个档位额外保留的余量（dp）。
+         * 用于吸收字体缩放（用户把系统字号调大）与启动器给小组件加的内边距；
+         * 宁可少显示一门，也不要被裁切。
+         */
+        private const val HEIGHT_SAFETY_MARGIN_DP = 30
+
+        /** 顶部区域 + N 行课程（含行间距）实际占用的高度 */
+        private fun contentHeightDp(rows: Int): Int =
+            FIXED_TOP_DP + rows * COURSE_ROW_HEIGHT_DP + (rows - 1).coerceAtLeast(0) * COURSE_ROW_GAP_DP
+
+        /**
+         * 分档阈值由 contentHeightDp + 余量向上取整到 5dp 得到，保证与布局常量不会走散：
+         * - 1 行门槛：contentHeightDp(1) = 48 + 32      = 80  → 80dp
+         * - 2 行门槛：contentHeightDp(2) = 48 + 64 + 3  = 115 → +30 → 145dp
+         * - 3 行门槛：contentHeightDp(3) = 48 + 96 + 6  = 150 → +30 → 180dp
+         *
+         * 真机实测校准（OnePlus PHB110 / Android 13 / 480dpi / ColorOS 桌面，
+         * dumpsys appwidget 打印 min=(64001x30721) 即 250×120dp）：
+         * 桌面上已存在的实例（id=13）可用高度就是 120dp，落在「1 门课」档；
+         * 120dp 的实际预算 = 120 - 6(上 padding) - 34(顶栏) - 2 - 32(一行) - 6(下 padding) = 40dp 余量，
+         * 因此该档位能完整显示「顶栏 + 1 门课」，不会被裁切。
+         */
+        private const val ROWS_1_MIN_HEIGHT_DP = 80
+        private val ROWS_2_MIN_HEIGHT_DP = roundUpTo5(contentHeightDp(2) + HEIGHT_SAFETY_MARGIN_DP)
+        private val ROWS_3_MIN_HEIGHT_DP = roundUpTo5(contentHeightDp(3) + HEIGHT_SAFETY_MARGIN_DP)
+
+        /** 向上取整到 5dp，让阈值好读、并避免定在边界上 */
+        private fun roundUpTo5(value: Int): Int = (value + 4) / 5 * 5
+
+        /** 读不到任何尺寸信息时的兜底：与 schedule_widget_info.xml 声明的 minHeight 一致 */
+        private const val FALLBACK_HEIGHT_DP = 120
+
         private fun offsetName(context: Context, offset: Int): String =
             context.getString(OFFSET_NAME_RES[offset] ?: R.string.widget_offset_today)
+
+        /**
+         * 按桌面实际给出的可用高度决定显示几门课（阈值最终值：80 / 145 / 180dp）：
+         * - ≥ 180dp → 3 门
+         * - ≥ 145dp → 2 门
+         * - ≥ 80dp  → 1 门（真机 120dp 的实例落在这里，完整不裁切）
+         * - < 80dp  → 0 门，只显示顶栏 + 一行提示（用户把高度压到极限时的退化表现，
+         *   因为 RemoteViews 不能在运行时移除顶栏，无法进一步腾空间）
+         */
+        private fun visibleRowsFor(heightDp: Int): Int = when {
+            heightDp >= ROWS_3_MIN_HEIGHT_DP -> 3
+            heightDp >= ROWS_2_MIN_HEIGHT_DP -> 2
+            heightDp >= ROWS_1_MIN_HEIGHT_DP -> 1
+            else -> 0
+        }
     }
 
+    /** 一行课程对应的 RemoteViews id 组合 */
+    private data class CourseRowIds(
+        val container: Int,
+        val time: Int,
+        val title: Int,
+        val desc: Int
+    )
+
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
+        // goAsync 让广播接收器在 onReceive 返回后仍能完成查库 + 绘制，最多约 10s
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -61,6 +138,29 @@ class ScheduleWidgetProvider : AppWidgetProvider() {
                 Log.e(TAG, "Error updating widgets", e)
             } finally {
                 pendingResult?.finish()
+            }
+        }
+    }
+
+    /**
+     * 用户拖动改变小组件尺寸后由系统立即回调，必须在这里按新高度重算行数并重绘；
+     * 否则要等到下一个 updatePeriodMillis（30 分钟）才会生效。
+     *
+     * 这里不使用回调入参 [newOptions]，而是在 updateAppWidget 里重新
+     * getAppWidgetOptions(appWidgetId)：回调触发时新尺寸已经写回系统，
+     * 统一走同一个读取路径可以避免两处对 MIN/MAX_HEIGHT 的解读不一致。
+     */
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: Bundle
+    ) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                updateAppWidget(context, appWidgetManager, appWidgetId)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating widget after resize", e)
             }
         }
     }
@@ -124,6 +224,10 @@ class ScheduleWidgetProvider : AppWidgetProvider() {
         // 学期名由开学日期推导（如 2026-2027-1），不再写死年级
         val subtitle = "${prefs.termLabel} | ${context.getString(R.string.widget_week_n, weekNumber)} ${dayNameOf(dayOfWeekInt)}"
 
+        // 尺寸自适应：真实可用高度决定显示几门课，避免固定两块课程行在 2 格高度下被裁切
+        val availableHeightDp = resolveAvailableHeightDp(context, appWidgetManager, appWidgetId)
+        val visibleRows = visibleRowsFor(availableHeightDp)
+
         views.setTextViewText(R.id.tv_widget_date, dateString)
         views.setTextViewText(R.id.tv_widget_sub, subtitle)
         views.setImageViewResource(R.id.iv_empty_icon, R.drawable.ic_schedule_empty)
@@ -145,42 +249,7 @@ class ScheduleWidgetProvider : AppWidgetProvider() {
             } else {
                 views.setViewVisibility(R.id.layout_empty_state, View.GONE)
                 views.setViewVisibility(R.id.layout_courses_state, View.VISIBLE)
-
-                // 第一门课
-                val c1 = targetCourses[0]
-                val (s1, e1) = CampusPeriod.getTimeRange(c1.startPeriod, c1.endPeriod, campus)
-                views.setTextViewText(R.id.tv_course1_time, "$s1\n$e1")
-                views.setTextViewText(R.id.tv_course1_title, c1.name)
-                views.setTextViewText(
-                    R.id.tv_course1_desc,
-                    "${cleanClassroom(c1.classroom)} | ${c1.teacher}"
-                )
-
-                // 第二门课
-                if (targetCourses.size > 1) {
-                    views.setViewVisibility(R.id.layout_course2, View.VISIBLE)
-                    val c2 = targetCourses[1]
-                    val (s2, _) = CampusPeriod.getTimeRange(c2.startPeriod, c2.endPeriod, campus)
-                    views.setTextViewText(R.id.tv_course2_time, s2)
-                    views.setTextViewText(
-                        R.id.tv_course2_info,
-                        "${c2.name} | ${cleanClassroom(c2.classroom)}"
-                    )
-                } else {
-                    views.setViewVisibility(R.id.layout_course2, View.GONE)
-                }
-
-                // 超过两门课时给出剩余数量提示，避免用户以为当天只有两门课
-                val restCount = targetCourses.size - 2
-                if (restCount > 0) {
-                    views.setViewVisibility(R.id.tv_course_more, View.VISIBLE)
-                    views.setTextViewText(
-                        R.id.tv_course_more,
-                        context.getString(R.string.widget_more_courses, restCount)
-                    )
-                } else {
-                    views.setViewVisibility(R.id.tv_course_more, View.GONE)
-                }
+                bindCourseRows(context, views, targetCourses, visibleRows, campus)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching courses for widget", e)
@@ -205,6 +274,81 @@ class ScheduleWidgetProvider : AppWidgetProvider() {
 
         appWidgetManager.updateAppWidget(appWidgetId, views)
     }
+
+    /**
+     * 把课程列表填进预置的 1~3 行里。
+     *
+     * 「还有 N 门课」不额外占一行：当课程数多于当前档位能显示的行数时，
+     * 把最后一行让给提示（占用的仍是课程行位，高度完全一致），
+     * 因此课程区总高度永远不超过档位允许的行数，不会被桌面纵向裁掉。
+     */
+    private fun bindCourseRows(
+        context: Context,
+        views: RemoteViews,
+        courses: List<Course>,
+        visibleRows: Int,
+        campus: String
+    ) {
+        val rowCount = visibleRows.coerceIn(0, COURSE_ROWS.size)
+
+        // 档位只有 1 行时，唯一一行留给当天的第一门课（比提示「还有 N 门课」有用得多）；
+        // 档位有 2~3 行时，把最后一行让给提示（占用的是课程行位，高度一致）；
+        // 极端情况一行都放不下（< 70dp）时，这一行只用来告诉用户还有几门课。
+        val showMoreLine = when {
+            rowCount >= 2 -> true
+            rowCount == 0 -> true
+            else -> false
+        }
+        val courseSlots = if (rowCount >= 2) rowCount - 1 else rowCount
+        val moreCount = if (showMoreLine) courses.size - courseSlots else 0
+
+        for (index in COURSE_ROWS.indices) {
+            val row = COURSE_ROWS[index]
+            val course = courses.getOrNull(index)
+            if (index < courseSlots && course != null) {
+                views.setViewVisibility(row.container, View.VISIBLE)
+                // 时间列是单行（maxLines=1）：只放开始时间，否则 Android 会在末尾补省略号
+                // （例如「10:05…」），既难看又丢信息。完整起止时间在 App 内查看。
+                val (startTime, _) = CampusPeriod.getTimeRange(course.startPeriod, course.endPeriod, campus)
+                views.setTextViewText(row.time, startTime)
+                views.setTextViewText(row.title, course.name)
+                views.setTextViewText(row.desc, "${cleanClassroom(course.classroom)} | ${course.teacher}")
+            } else {
+                // 必须 GONE：INVISIBLE 仍会占用行高，会在小尺寸下把内容顶出可视区
+                views.setViewVisibility(row.container, View.GONE)
+            }
+        }
+
+        if (moreCount > 0) {
+            views.setViewVisibility(R.id.tv_course_more, View.VISIBLE)
+            views.setTextViewText(
+                R.id.tv_course_more,
+                context.getString(R.string.widget_more_courses, moreCount)
+            )
+        } else {
+            views.setViewVisibility(R.id.tv_course_more, View.GONE)
+        }
+    }
+
+    /**
+     * 读取桌面实际分配给该实例的可用高度（dp）。
+     * 优先 MIN_HEIGHT；为 0（部分启动器只给 MAX）时退回 MAX_HEIGHT；取两者较大值，
+     * 兜底 FALLBACK_HEIGHT_DP（与 info 里声明的 minHeight 一致，真机实测该实例就是 120dp）。
+     * 每个实例独立读取，因此同一桌面上高低不同的实例会显示不同行数。
+     */
+    private fun resolveAvailableHeightDp(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int
+    ): Int = runCatching {
+        val options = appWidgetManager.getAppWidgetOptions(appWidgetId)
+        val minHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0) ?: 0
+        val maxHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0) ?: 0
+        val declaredHeight = runCatching {
+            appWidgetManager.getAppWidgetInfo(appWidgetId)?.minHeight
+        }.getOrNull() ?: 0
+        max(max(minHeight, maxHeight), declaredHeight)
+    }.getOrDefault(0).takeIf { it > 0 } ?: FALLBACK_HEIGHT_DP
 
     /**
      * 三个状态下的按钮布局：

@@ -27,10 +27,11 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.edu.qut.campus.R
+import cn.edu.qut.campus.data.error.toAppError
 import cn.edu.qut.campus.data.local.AppPreferences
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 import cn.edu.qut.campus.service.CalendarSyncManager
-import cn.edu.qut.campus.ui.components.readableSyncError
+import cn.edu.qut.campus.ui.components.text
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -100,13 +101,13 @@ fun CalendarScreen(
                     snackbarHostState.showSnackbar(
                         context.getString(
                             R.string.common_sync_failed,
-                            readableSyncError(result.exceptionOrNull())
+                            result.exceptionOrNull().toAppError().text(context)
                         )
                     )
                 }
             } catch (e: Exception) {
                 snackbarHostState.showSnackbar(
-                    context.getString(R.string.common_sync_failed, readableSyncError(e))
+                    context.getString(R.string.common_sync_failed, e.toAppError().text(context))
                 )
             } finally {
                 isSyncing = false
@@ -288,7 +289,7 @@ fun CalendarScreen(
                             snackbarHostState.showSnackbar(context.getString(R.string.calendar_clear_success))
                         } catch (e: Exception) {
                             snackbarHostState.showSnackbar(
-                                context.getString(R.string.calendar_clear_failed, readableSyncError(e))
+                                context.getString(R.string.calendar_clear_failed, e.toAppError().text(context))
                             )
                         }
                     }

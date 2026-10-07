@@ -1,6 +1,5 @@
 package cn.edu.qut.campus.ui.screens
 
-import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -23,11 +22,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.edu.qut.campus.R
+import cn.edu.qut.campus.data.error.AppError
+import cn.edu.qut.campus.data.error.toAppError
 import cn.edu.qut.campus.data.model.AcademicModule
 import cn.edu.qut.campus.data.model.AcademicProgress
 import cn.edu.qut.campus.data.model.Grade
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 import cn.edu.qut.campus.QutApplication
+import cn.edu.qut.campus.ui.components.text
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -46,14 +48,16 @@ private fun gpaText(value: Double?): String =
 private fun creditText(value: Double?): String =
     if (value == null || value <= 0.0) NO_DATA else String.format(Locale.US, "%.1f", value)
 
-/** 同步学业数据：成功返回 null，失败返回可直接展示给用户的原因 */
-private suspend fun syncAcademicOrNull(context: Context, repository: ScheduleRepository): String? = try {
-    repository.syncAcademicProgress().exceptionOrNull()
-        ?.let { it.message?.takeIf { m -> m.isNotBlank() } ?: context.getString(R.string.academic_error_session_expired) }
+/**
+ * 同步学业数据：成功返回 null，失败返回可直接展示给用户的错误类型。
+ * 文案不再在这里拼（原先还依赖 Context 取兜底文案），统一交给 UI 层的 AppError.text()。
+ */
+private suspend fun syncAcademicOrNull(repository: ScheduleRepository): AppError? = try {
+    repository.syncAcademicProgress().exceptionOrNull()?.toAppError()
 } catch (e: CancellationException) {
     throw e
 } catch (e: Exception) {
-    e.message?.takeIf { it.isNotBlank() } ?: context.getString(R.string.common_network_error)
+    e.toAppError()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -70,7 +74,7 @@ fun AcademicScreen(repository: ScheduleRepository) {
     val academicProgress by repository.academicProgressFlow.collectAsStateWithLifecycle()
     val allGrades by repository.gradesFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     var isRefreshing by remember { mutableStateOf(false) }
-    var syncError by remember { mutableStateOf<String?>(null) }
+    var syncError by remember { mutableStateOf<AppError?>(null) }
 
     // 动态提取未通过的课程列表（基于去重后的真实有效记录）
     val dedupedGrades = remember(allGrades) { Grade.deduplicateGrades(allGrades) }
@@ -109,14 +113,14 @@ fun AcademicScreen(repository: ScheduleRepository) {
     LaunchedEffect(Unit) {
         if (academicProgress == null) {
             isRefreshing = true
-            syncError = syncAcademicOrNull(context, repository)
+            syncError = syncAcademicOrNull(repository)
             isRefreshing = false
         }
     }
 
     LaunchedEffect(syncError) {
         syncError?.let {
-            snackbarHostState.showSnackbar(context.getString(R.string.academic_sync_failed, it))
+            snackbarHostState.showSnackbar(context.getString(R.string.academic_sync_failed, it.text(context)))
             syncError = null
         }
     }
@@ -136,7 +140,7 @@ fun AcademicScreen(repository: ScheduleRepository) {
                         onClick = {
                             coroutineScope.launch {
                                 isRefreshing = true
-                                val error = syncAcademicOrNull(context, repository)
+                                val error = syncAcademicOrNull(repository)
                                 isRefreshing = false
                                 if (error == null) {
                                     snackbarHostState.showSnackbar(context.getString(R.string.academic_sync_success))
@@ -190,7 +194,7 @@ fun AcademicScreen(repository: ScheduleRepository) {
                         onClick = {
                             coroutineScope.launch {
                                 isRefreshing = true
-                                val error = syncAcademicOrNull(context, repository)
+                                val error = syncAcademicOrNull(repository)
                                 isRefreshing = false
                                 if (error == null) {
                                     snackbarHostState.showSnackbar(context.getString(R.string.academic_sync_success))

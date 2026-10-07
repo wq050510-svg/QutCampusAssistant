@@ -31,11 +31,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.edu.qut.campus.R
+import cn.edu.qut.campus.data.error.toAppError
 import cn.edu.qut.campus.data.local.AppPreferences
 import cn.edu.qut.campus.data.model.CampusPeriod
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 import cn.edu.qut.campus.ui.components.CampusPickerDialog
-import cn.edu.qut.campus.ui.components.readableSyncError
+import cn.edu.qut.campus.ui.components.text
 import cn.edu.qut.campus.widget.ScheduleWidgetProvider
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -103,17 +104,17 @@ fun ProfileScreen(
                     lastSyncAt = prefs.lastSyncAt
                     Toast.makeText(context, context.getString(R.string.profile_sync_all_success), Toast.LENGTH_SHORT).show()
                 } else {
-                    // 错误统一走 readableSyncError，不再直接拼 exception.message
+                    // 错误统一走 AppError → 资源映射，不再直接拼 exception.message
                     Toast.makeText(
                         context,
-                        context.getString(R.string.common_sync_failed, readableSyncError(sRes.exceptionOrNull())),
+                        context.getString(R.string.common_sync_failed, sRes.exceptionOrNull().toAppError().text(context)),
                         Toast.LENGTH_SHORT
                     ).show()
                 }
             } catch (e: Exception) {
                 Toast.makeText(
                     context,
-                    context.getString(R.string.profile_sync_error, readableSyncError(e)),
+                    context.getString(R.string.profile_sync_error, e.toAppError().text(context)),
                     Toast.LENGTH_SHORT
                 ).show()
             } finally {

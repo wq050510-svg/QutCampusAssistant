@@ -1,6 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   桌面小组件布局（透明底，跟随壁纸）。
+
+  高度预算（与 ScheduleWidgetProvider 的 ROWS_*_MIN_HEIGHT_DP 严格对应，改动任一常量都要同步）：
+    root paddingTop 6 + paddingBottom 6            = 12dp
+    layout_widget_header（日期 + 学期周次，固定）  = 34dp
+    layout_courses_state paddingTop                 = 2dp
+    每行课程行 layout_courseN                       = 32dp
+    行间距（第 2/3 行与「还有 N 门课」的 marginTop） = 3dp（仅 1 个间隔）
+  ⇒ 1 行下限 = 34 + 2 + 32 + 12   = 80dp + 30dp 余量 = 110dp
+     2 行下限 = 110 + 3 + 32      = 145dp + 30dp 余量 = 175dp
+     3 行下限 = 175 + 3 + 32      = 210dp + 30dp 余量 = 240dp
+  真机实测（OnePlus PHB110 / 480dpi / ColorOS 桌面）：实例 id=13，min=(64001x30721)dp<<8
+  → 250×120dp，即用户那个实例只有 120dp 高，落在「1 门课」档，必须完整不裁切。
+
+  约定：
+  - 根布局高度 match_parent，内部自上而下全部 wrap_content，不写会溢出的固定 dp 高度；
+  - 课程区预置 3 行结构完全一致的课程行，程序按可用高度显示 1~3 行，
+    不显示的行一律 View.GONE（不能用 INVISIBLE，那会继续占高）；
+  - 「还有 N 门课」不是第 4 行，而是占用「最后一行课程位」，总高度恒定不溢出；
+  - 所有文字 maxLines=1 + ellipsize=end，行高固定 32dp，避免大字体下被压扁或截断；
+  - 「无课 / 读取失败」用 36dp 小插画 + 单行文字，最小高度下也能完整显示。
+
   所有 android:text 留空：真实文案由 ScheduleWidgetProvider 通过 RemoteViews 注入，
   tools:text 仅供 Android Studio 预览，避免维护者把预览占位值当成真实内容。
 -->
@@ -11,21 +32,27 @@
     android:layout_height="match_parent"
     android:background="@android:color/transparent"
     android:orientation="vertical"
-    android:paddingStart="16dp"
-    android:paddingTop="10dp"
-    android:paddingEnd="16dp"
-    android:paddingBottom="10dp">
+    android:paddingStart="12dp"
+    android:paddingTop="6dp"
+    android:paddingEnd="12dp"
+    android:paddingBottom="6dp">
 
-    <!-- 顶栏：日期与周次信息 + 日期切换按钮 -->
+    <!--
+      顶栏：日期 + 学期/周次 + 昨日/明日切换按钮。
+      固定高度 34dp：一行 16sp 日期 + 一行 11sp 周次（含 1dp 间距）刚好放得下，
+      同时把这块高度锁死，Provider 才能按「可用高度 - 34dp」推算能放几行课。
+    -->
     <RelativeLayout
+        android:id="@+id/layout_widget_header"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="34dp">
 
         <LinearLayout
             android:id="@+id/layout_widget_header_left"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_alignParentStart="true"
+            android:layout_centerVertical="true"
             android:layout_toStartOf="@id/btn_widget_prev_day"
             android:orientation="vertical">
 
@@ -41,7 +68,7 @@
                 android:shadowRadius="4"
                 android:text=""
                 android:textColor="#FFFFFFFF"
-                android:textSize="18sp"
+                android:textSize="16sp"
                 android:textStyle="bold"
                 tools:text="2026/9/20" />
 
@@ -49,7 +76,6 @@
                 android:id="@+id/tv_widget_sub"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:shadowColor="@color/widget_text_shadow"
@@ -58,7 +84,7 @@
                 android:shadowRadius="3"
                 android:text=""
                 android:textColor="#E6FFFFFF"
-                android:textSize="12sp"
+                android:textSize="11sp"
                 tools:text="2026-2027-1 | 第3周 周日" />
         </LinearLayout>
 
@@ -68,16 +94,21 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_centerVertical="true"
-            android:layout_marginEnd="4dp"
+            android:layout_marginEnd="2dp"
             android:layout_toStartOf="@id/btn_widget_toggle_day"
-            android:padding="8dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:paddingStart="6dp"
+            android:paddingTop="6dp"
+            android:paddingEnd="6dp"
+            android:paddingBottom="6dp"
             android:shadowColor="@color/widget_text_shadow"
             android:shadowDx="1"
             android:shadowDy="1"
             android:shadowRadius="3"
             android:text=""
             android:textColor="#CCFFFFFF"
-            android:textSize="13sp"
+            android:textSize="12sp"
             tools:text="← 昨日" />
 
         <!-- 前进一天 -->
@@ -87,83 +118,98 @@
             android:layout_height="wrap_content"
             android:layout_alignParentEnd="true"
             android:layout_centerVertical="true"
-            android:padding="8dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:paddingStart="6dp"
+            android:paddingTop="6dp"
+            android:paddingEnd="6dp"
+            android:paddingBottom="6dp"
             android:shadowColor="@color/widget_text_shadow"
             android:shadowDx="1"
             android:shadowDy="1"
             android:shadowRadius="3"
             android:text=""
             android:textColor="#FFFFFFFF"
-            android:textSize="13sp"
+            android:textSize="12sp"
             tools:text="明日 →" />
     </RelativeLayout>
 
-    <!-- 中间状态：无课时的文具手绘插画状态 -->
+    <!-- 中间状态：无课 / 读取失败。插画固定 36dp，避免大图把文字挤出可视区 -->
     <LinearLayout
         android:id="@+id/layout_empty_state"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
+        android:layout_height="wrap_content"
         android:gravity="center"
         android:orientation="vertical"
+        android:paddingTop="4dp"
+        android:paddingBottom="2dp"
         android:visibility="visible">
 
         <ImageView
             android:id="@+id/iv_empty_icon"
-            android:layout_width="72dp"
-            android:layout_height="72dp"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
             android:contentDescription="无课插画"
             android:src="@drawable/ic_schedule_empty" />
 
         <TextView
             android:id="@+id/tv_empty_text"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="2dp"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="2"
             android:shadowColor="@color/widget_text_shadow"
             android:shadowDx="1"
             android:shadowDy="1"
             android:shadowRadius="3"
             android:text=""
             android:textColor="#E6FFFFFF"
-            android:textSize="13sp"
+            android:textSize="12sp"
             tools:text="今天没有课哦" />
     </LinearLayout>
 
-    <!-- 中间状态：有课时的课程流列表状态 -->
+    <!-- 中间状态：有课时的课程流。高度 wrap_content，行数由 Provider 决定（1~3 行） -->
     <LinearLayout
         android:id="@+id/layout_courses_state"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:gravity="center_vertical"
+        android:layout_height="wrap_content"
         android:orientation="vertical"
+        android:paddingTop="2dp"
         android:visibility="gone">
 
-        <!-- 当前/下一节课卡片 -->
+        <!-- 课程行 1：结构固定 32dp，时间列 + 分隔线 + 课名/教室教师 -->
         <LinearLayout
+            android:id="@+id/layout_course1"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="32dp"
             android:background="#26FFFFFF"
+            android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:padding="6dp">
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp">
 
             <TextView
                 android:id="@+id/tv_course1_time"
-                android:layout_width="wrap_content"
+                android:layout_width="52dp"
                 android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
                 android:shadowColor="@color/widget_text_shadow"
                 android:shadowRadius="2"
                 android:text=""
                 android:textColor="#FFFFFFFF"
-                android:textSize="11sp"
-                tools:text="08:00\n09:50" />
+                android:textSize="10sp"
+                tools:text="08:00" />
 
-            <ImageView
+            <!-- RemoteViews 不允许裸 View 控件（运行时会报 "Class not allowed to be inflated"），
+                 分隔线用无子 View 的 LinearLayout 实现 -->
+            <LinearLayout
                 android:layout_width="2dp"
-                android:layout_height="match_parent"
-                android:layout_marginStart="8dp"
-                android:layout_marginEnd="8dp"
+                android:layout_height="20dp"
+                android:layout_marginStart="5dp"
+                android:layout_marginEnd="5dp"
                 android:background="#80FFFFFF" />
 
             <LinearLayout
@@ -174,7 +220,7 @@
 
                 <TextView
                     android:id="@+id/tv_course1_title"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:ellipsize="end"
                     android:maxLines="1"
@@ -182,87 +228,181 @@
                     android:shadowRadius="3"
                     android:text=""
                     android:textColor="#FFFFFFFF"
-                    android:textSize="14sp"
+                    android:textSize="12sp"
                     android:textStyle="bold"
                     tools:text="建筑制图" />
 
                 <TextView
                     android:id="@+id/tv_course1_desc"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="1dp"
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:shadowColor="@color/widget_text_shadow"
                     android:shadowRadius="2"
                     android:text=""
                     android:textColor="#E6FFFFFF"
-                    android:textSize="11sp"
+                    android:textSize="10sp"
                     tools:text="B203 | 郑杰" />
             </LinearLayout>
         </LinearLayout>
 
-        <!-- 第二节课卡片 -->
+        <!-- 课程行 2：与行 1 完全同构 -->
         <LinearLayout
             android:id="@+id/layout_course2"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="32dp"
             android:layout_marginTop="3dp"
             android:background="#1AFFFFFF"
+            android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:padding="5dp">
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp">
 
             <TextView
                 android:id="@+id/tv_course2_time"
-                android:layout_width="wrap_content"
+                android:layout_width="52dp"
                 android:layout_height="wrap_content"
-                android:shadowColor="@color/widget_text_shadow"
-                android:shadowRadius="2"
-                android:text=""
-                android:textColor="#E6FFFFFF"
-                android:textSize="11sp"
-                tools:text="14:00" />
-
-            <ImageView
-                android:layout_width="2dp"
-                android:layout_height="match_parent"
-                android:layout_marginStart="8dp"
-                android:layout_marginEnd="8dp"
-                android:background="#40FFFFFF" />
-
-            <TextView
-                android:id="@+id/tv_course2_info"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:shadowColor="@color/widget_text_shadow"
                 android:shadowRadius="2"
                 android:text=""
                 android:textColor="#E6FFFFFF"
-                android:textSize="12sp"
-                tools:text="结构力学A上 | B524" />
+                android:textSize="10sp"
+                tools:text="14:00" />
+
+            <LinearLayout
+                android:layout_width="2dp"
+                android:layout_height="20dp"
+                android:layout_marginStart="5dp"
+                android:layout_marginEnd="5dp"
+                android:background="#40FFFFFF" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tv_course2_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:shadowColor="@color/widget_text_shadow"
+                    android:shadowRadius="2"
+                    android:text=""
+                    android:textColor="#E6FFFFFF"
+                    android:textSize="12sp"
+                    tools:text="结构力学A上" />
+
+                <TextView
+                    android:id="@+id/tv_course2_desc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:shadowColor="@color/widget_text_shadow"
+                    android:shadowRadius="2"
+                    android:text=""
+                    android:textColor="#CCFFFFFF"
+                    android:textSize="10sp"
+                    tools:text="B524 | 李明" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 课程行 3：与行 1 完全同构，仅在高档位显示 -->
+        <LinearLayout
+            android:id="@+id/layout_course3"
+            android:layout_width="match_parent"
+            android:layout_height="32dp"
+            android:layout_marginTop="3dp"
+            android:background="#1AFFFFFF"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tv_course3_time"
+                android:layout_width="52dp"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:shadowColor="@color/widget_text_shadow"
+                android:shadowRadius="2"
+                android:text=""
+                android:textColor="#E6FFFFFF"
+                android:textSize="10sp"
+                tools:text="16:00" />
+
+            <LinearLayout
+                android:layout_width="2dp"
+                android:layout_height="20dp"
+                android:layout_marginStart="5dp"
+                android:layout_marginEnd="5dp"
+                android:background="#40FFFFFF" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tv_course3_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:shadowColor="@color/widget_text_shadow"
+                    android:shadowRadius="2"
+                    android:text=""
+                    android:textColor="#E6FFFFFF"
+                    android:textSize="12sp"
+                    tools:text="大学英语" />
+
+                <TextView
+                    android:id="@+id/tv_course3_desc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:shadowColor="@color/widget_text_shadow"
+                    android:shadowRadius="2"
+                    android:text=""
+                    android:textColor="#CCFFFFFF"
+                    android:textSize="10sp"
+                    tools:text="A101 | 王芳" />
+            </LinearLayout>
         </LinearLayout>
 
         <!--
-          第三门课及以后的提示，避免用户误以为当天只有两门课。
-          为抵消这一行的高度，上方根布局与两张卡片的 padding 已整体收紧，总高度与改造前基本持平。
+          「还有 N 门课」提示：不是额外的第 4 行，而是顶替「最后一行课程位」。
+          Provider 判断课程数多于当前档位能显示的行数时，会把最后一行换成这一行（同为 32dp），
+          因此无论当天有几门课，课程区总高度都不会超过档位允许的行数。
         -->
         <TextView
             android:id="@+id/tv_course_more"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
+            android:layout_width="match_parent"
+            android:layout_height="32dp"
+            android:layout_marginTop="3dp"
+            android:background="#1AFFFFFF"
             android:ellipsize="end"
+            android:gravity="center_vertical"
             android:maxLines="1"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
             android:shadowColor="@color/widget_text_shadow"
             android:shadowDx="1"
             android:shadowDy="1"
             android:shadowRadius="2"
             android:text=""
             android:textColor="#CCFFFFFF"
-            android:textSize="10sp"
+            android:textSize="11sp"
             android:visibility="gone"
             tools:text="还有 3 门课" />
     </LinearLayout>

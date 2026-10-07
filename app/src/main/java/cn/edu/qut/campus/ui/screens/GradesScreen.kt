@@ -28,6 +28,7 @@ import cn.edu.qut.campus.data.repository.ScheduleRepository
 import cn.edu.qut.campus.ui.components.EmptyState
 import cn.edu.qut.campus.ui.components.ErrorState
 import cn.edu.qut.campus.ui.components.LoadingState
+import cn.edu.qut.campus.ui.components.textOrNull
 import cn.edu.qut.campus.ui.viewmodel.GradesViewModel
 
 /**
@@ -53,9 +54,12 @@ fun GradesScreen(repository: ScheduleRepository) {
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 同步失败文案由 ViewModel 暴露（String?）；SnackbarHostState 属于 UI 层，仍留在页面里消费
+    // ViewModel 暴露的是 AppError（错误类型，不含文案）：文案由 UI 层映射。
+    // SnackbarHostState 属于 UI 层，仍留在页面里消费；effect 块不是 @Composable，
+    // 所以文案要在组合期先取好。
+    val syncErrorText = syncError.textOrNull()
     LaunchedEffect(syncError) {
-        syncError?.let { message -> snackbarHostState.showSnackbar(message) }
+        syncErrorText?.let { message -> snackbarHostState.showSnackbar(message) }
     }
 
     // 手动同步成功的一次性 Toast 事件：消费后立即清除，旋屏不会重复弹
@@ -91,9 +95,14 @@ fun GradesScreen(repository: ScheduleRepository) {
     }
 
     // 学期筛选现在由 ViewModel 持有（不再随切 Tab 重置）：万一本地数据被清空/换学期后
-    // 停在一个已不存在的学期上，兜底回到「全部学期」，避免列表永远空白
+    // 停在一个已不存在的学期上，兜底回到「全部学期」，避免列表永远空白。
+    // 必须等本地成绩真的加载出来（baseGrades 非空）再校验：冷启动首帧 grades 还是 stateIn
+    // 的初始空列表，此时 semesters 只有「全部学期」，会把 SavedStateHandle 恢复出来的
+    // 合法学期误判成失效并重置，导致恢复失效。
     LaunchedEffect(semesters) {
-        if (selectedSemester !in semesters) vm.selectSemester(GradesViewModel.SEMESTER_ALL)
+        if (baseGrades.isNotEmpty() && selectedSemester !in semesters) {
+            vm.selectSemester(GradesViewModel.SEMESTER_ALL)
+        }
     }
 
     // 按学期过滤
@@ -263,7 +272,7 @@ fun GradesScreen(repository: ScheduleRepository) {
                 LoadingState(message = stringResource(R.string.grades_loading))
             } else if (failed) {
                 ErrorState(
-                    message = syncError ?: stringResource(R.string.grades_sync_failed_fallback),
+                    message = syncErrorText ?: stringResource(R.string.grades_sync_failed_fallback),
                     onRetry = { vm.refresh() }
                 )
             } else if (filteredGrades.isEmpty()) {

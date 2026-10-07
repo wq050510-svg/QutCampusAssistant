@@ -29,8 +29,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.edu.qut.campus.R
+import cn.edu.qut.campus.data.error.toAppError
 import cn.edu.qut.campus.data.repository.ScheduleRepository
-import cn.edu.qut.campus.ui.components.readableSyncError
+import cn.edu.qut.campus.ui.components.text
 import kotlinx.coroutines.launch
 
 /** 学号 / 工号的最短合理长度，用于登录前的本地粗校验 */
@@ -88,9 +89,10 @@ fun LoginScreen(
                 isLoading = false
                 val result = outcome.getOrNull()
                 when {
-                    result == null -> errorMessage = readableSyncError(outcome.exceptionOrNull())
+                    // 失败原因统一分类成 AppError 后再映射成文案，页面不再出现硬编码中文
+                    result == null -> errorMessage = outcome.exceptionOrNull().toAppError().text(context)
                     result.isSuccess -> onLoginSuccess()
-                    else -> errorMessage = readableSyncError(result.exceptionOrNull())
+                    else -> errorMessage = result.exceptionOrNull().toAppError().text(context)
                 }
             }
         }

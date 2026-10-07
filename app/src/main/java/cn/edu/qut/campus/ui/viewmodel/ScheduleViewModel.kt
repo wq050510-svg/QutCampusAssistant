@@ -1,7 +1,9 @@
 package cn.edu.qut.campus.ui.viewmodel
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -25,8 +27,15 @@ import java.time.LocalDate
  *
  * 这里同时接管「回到前台重算当前周 / 今天星期几」的逻辑（原先写在 LifecycleEventEffect 里），
  * 页面只负责在 ON_RESUME 时转发一次 [onResume]。
+ *
+ * 用户的选择（当前周次 / 周-日视图 / 选中星期）额外写进 [SavedStateHandle]：
+ * ViewModel 只能扛住配置变更与切 Tab，进程被系统回收后仍需恢复，
+ * 这部分状态此前靠 rememberSaveable 保住，搬进 ViewModel 后必须补回。
  */
-class ScheduleViewModel(private val repository: ScheduleRepository) : ViewModel() {
+class ScheduleViewModel(
+    private val repository: ScheduleRepository,
+    private val savedStateHandle: SavedStateHandle
+) : ViewModel() {
 
     /** 课表数据（Room → Flow）。WhileSubscribed：页面不可见 5s 后停止订阅数据库 */
     val courses: StateFlow<List<Course>> = repository.coursesFlow
@@ -47,27 +56,36 @@ class ScheduleViewModel(private val repository: ScheduleRepository) : ViewModel(
 
     // ------------------------------------------------------------------
     // 关键 UI 状态。
-    // 原先用 rememberSaveable（旋屏不丢、切 Tab 仍会丢），搬进 ViewModel 后不再需要 rememberSaveable。
+    // 原先用 rememberSaveable（旋屏不丢、切 Tab 仍会丢），搬进 ViewModel 后不再需要；
+    // 其中「用户选择」类状态还写进 SavedStateHandle，进程回收后冷启动也能恢复。
     // ------------------------------------------------------------------
 
+    /** 构造时算一次的当前周：同时作为 [selectedWeek] 的持久化默认值，避免重复推导 */
+    private val initialCurrentWeek = repository.calculateCurrentWeek()
+
     /** 当前教学周（按开学日期推导，回到前台会重算） */
-    private val _currentWeek = MutableStateFlow(repository.calculateCurrentWeek())
+    private val _currentWeek = MutableStateFlow(initialCurrentWeek)
     val currentWeek: StateFlow<Int> = _currentWeek.asStateFlow()
 
-    /** 当前查看的周次：默认跟随本周 */
-    private val _selectedWeek = MutableStateFlow(_currentWeek.value)
-    val selectedWeek: StateFlow<Int> = _selectedWeek.asStateFlow()
+    /**
+     * 当前查看的周次：默认跟随本周。
+     * 用 SavedStateHandle 持久化：进程被回收后冷启动仍停留在用户上次看的周次。
+     */
+    val selectedWeek: StateFlow<Int> =
+        savedStateHandle.getStateFlow(KEY_SELECTED_WEEK, initialCurrentWeek)
 
-    /** 周视图 / 每日时间轴视图 */
-    private val _isDailyView = MutableStateFlow(false)
-    val isDailyView: StateFlow<Boolean> = _isDailyView.asStateFlow()
+    /** 周视图 / 每日时间轴视图（持久化） */
+    val isDailyView: StateFlow<Boolean> =
+        savedStateHandle.getStateFlow(KEY_IS_DAILY_VIEW, false)
 
-    /** 1 (周一) - 7 (周日) */
+    /** 1 (周一) - 7 (周日)；今天星期几不持久化，由 [onResume] 重算 */
     private val _todayDayOfWeek = MutableStateFlow(LocalDate.now().dayOfWeek.value)
     val todayDayOfWeek: StateFlow<Int> = _todayDayOfWeek.asStateFlow()
 
-    private val _activeDay = MutableStateFlow(_todayDayOfWeek.value)
-    val activeDay: StateFlow<Int> = _activeDay.asStateFlow()
+    /** 日视图选中的星期（持久化） */
+    val activeDay: StateFlow<Int> =
+        savedStateHandle.getStateFlow(KEY_ACTIVE_DAY, _todayDayOfWeek.value)
+
 
     /** 切换校区对话框 */
     private val _showCampusDialog = MutableStateFlow(false)
@@ -78,15 +96,15 @@ class ScheduleViewModel(private val repository: ScheduleRepository) : ViewModel(
     val selectedCoursesDetail: StateFlow<List<Course>?> = _selectedCoursesDetail.asStateFlow()
 
     fun selectWeek(week: Int) {
-        _selectedWeek.value = week
+        savedStateHandle[KEY_SELECTED_WEEK] = week
     }
 
     fun toggleDailyView() {
-        _isDailyView.value = !_isDailyView.value
+        savedStateHandle[KEY_IS_DAILY_VIEW] = !isDailyView.value
     }
 
     fun selectDay(day: Int) {
-        _activeDay.value = day
+        savedStateHandle[KEY_ACTIVE_DAY] = day
     }
 
     fun openCourseDetail(courses: List<Course>) {
@@ -115,22 +133,34 @@ class ScheduleViewModel(private val repository: ScheduleRepository) : ViewModel(
      * 回到前台时重新推导「当前第几周 / 今天星期几」：
      * 否则 App 长期驻留后台（隔天甚至隔周再打开）周次会停留在打开那一刻。
      * 页面在 LifecycleEventEffect(ON_RESUME) 里转发调用。
+     *
+     * 注意：LifecycleEventEffect 在本页重新进入组合时（含切 Tab 回来、进程回收后重建）
+     * 会立即补发一次 ON_RESUME。因此「把选中星期重置为今天」只在**跨天**时才做，
+     * 否则刚恢复出来的 activeDay 会被立刻冲掉，持久化形同虚设。
      */
     fun onResume() {
         val refreshedWeek = repository.calculateCurrentWeek()
-        val wasFollowingCurrentWeek = _selectedWeek.value == _currentWeek.value
+        val wasFollowingCurrentWeek = selectedWeek.value == _currentWeek.value
         _currentWeek.value = refreshedWeek
-        if (wasFollowingCurrentWeek) _selectedWeek.value = refreshedWeek
+        if (wasFollowingCurrentWeek) savedStateHandle[KEY_SELECTED_WEEK] = refreshedWeek
         val refreshedToday = LocalDate.now().dayOfWeek.value
+        val dayChanged = refreshedToday != _todayDayOfWeek.value
         _todayDayOfWeek.value = refreshedToday
-        _activeDay.value = refreshedToday
+        if (dayChanged) savedStateHandle[KEY_ACTIVE_DAY] = refreshedToday
         // 学期参数可能在「我的」里被改过，回到前台顺带刷新学期展示名
         _termLabel.value = repository.prefs.termLabel
     }
 
     companion object {
+        // SavedStateHandle 的 key：进程被系统回收后冷启动要还原用户上次的选择
+        private const val KEY_SELECTED_WEEK = "schedule_selected_week"
+        private const val KEY_IS_DAILY_VIEW = "schedule_is_daily_view"
+        private const val KEY_ACTIVE_DAY = "schedule_active_day"
+
         fun factory(repository: ScheduleRepository): ViewModelProvider.Factory = viewModelFactory {
-            initializer { ScheduleViewModel(repository) }
+            // createSavedStateHandle() 只能在这里调用：ComponentActivity 作为
+            // ViewModelStoreOwner 原生提供 SavedStateRegistryOwner，故无需额外配置
+            initializer { ScheduleViewModel(repository, createSavedStateHandle()) }
         }
     }
 }

@@ -1,14 +1,17 @@
 package cn.edu.qut.campus.ui.viewmodel
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import cn.edu.qut.campus.data.error.AppError
+import cn.edu.qut.campus.data.error.toAppError
 import cn.edu.qut.campus.data.local.AppPreferences
 import cn.edu.qut.campus.data.model.Exam
 import cn.edu.qut.campus.data.repository.ScheduleRepository
-import cn.edu.qut.campus.ui.components.readableSyncError
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -68,9 +71,15 @@ private fun sortExamsByTime(exams: List<Exam>, descending: Boolean): List<Exam> 
  * when(currentTab) 切页，页面一离开组合状态就丢，切回来会重新走一遍自动同步。
  * 搬进 ViewModel 后，切 Tab / 旋屏（配置变更）都不再丢，且同步任务不会因为页面离开组合被取消。
  *
- * 只存放状态与业务调用，Snackbar 仍由页面负责：这里只暴露错误文案。
+ * 只存放状态与业务调用，Snackbar 仍由页面负责：这里只暴露错误类型。
+ *
+ * 「已结束考试」的折叠状态额外写进 [SavedStateHandle]：
+ * ViewModel 只能扛住配置变更与切 Tab，进程被回收后冷启动仍需恢复（原先靠 rememberSaveable）。
  */
-class ExamsViewModel(private val repository: ScheduleRepository) : ViewModel() {
+class ExamsViewModel(
+    private val repository: ScheduleRepository,
+    private val savedStateHandle: SavedStateHandle
+) : ViewModel() {
 
     /** 考试列表（Room → Flow）。WhileSubscribed：页面不可见 5s 后停止订阅数据库 */
     val exams: StateFlow<List<Exam>> = repository.examsFlow
@@ -93,10 +102,10 @@ class ExamsViewModel(private val repository: ScheduleRepository) : ViewModel() {
     /** 是否正在同步（右上角按钮转圈 / 按钮禁用都用它） */
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
-    private val _syncError = MutableStateFlow<String?>(null)
+    private val _syncError = MutableStateFlow<AppError?>(null)
 
-    /** 同步失败文案（页面用 LaunchedEffect 消费成 Snackbar，并在失败态卡片里展示） */
-    val syncError: StateFlow<String?> = _syncError.asStateFlow()
+    /** 同步失败原因（页面用 LaunchedEffect 消费成 Snackbar，并在失败态卡片里展示） */
+    val syncError: StateFlow<AppError?> = _syncError.asStateFlow()
 
     private val _syncSucceeded = MutableStateFlow(false)
     private val _syncTriggered = MutableStateFlow(false)
@@ -107,9 +116,9 @@ class ExamsViewModel(private val repository: ScheduleRepository) : ViewModel() {
             syncing || (triggered && !succeeded && error == null)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    /** 历史已结束考试的折叠展开状态 */
-    private val _showFinishedExams = MutableStateFlow(false)
-    val showFinishedExams: StateFlow<Boolean> = _showFinishedExams.asStateFlow()
+    /** 历史已结束考试的折叠展开状态（持久化） */
+    val showFinishedExams: StateFlow<Boolean> =
+        savedStateHandle.getStateFlow(KEY_SHOW_FINISHED_EXAMS, false)
 
     /** 未结束的考试按时间正序（最近的排最前）。排序结果由 ViewModel 暴露，页面只渲染 */
     val upcomingExams: StateFlow<List<Exam>> = exams
@@ -129,7 +138,7 @@ class ExamsViewModel(private val repository: ScheduleRepository) : ViewModel() {
     private var autoSyncDone = false
 
     fun toggleFinishedExams() {
-        _showFinishedExams.value = !_showFinishedExams.value
+        savedStateHandle[KEY_SHOW_FINISHED_EXAMS] = !showFinishedExams.value
     }
 
     /**
@@ -161,13 +170,13 @@ class ExamsViewModel(private val repository: ScheduleRepository) : ViewModel() {
                     _syncSucceeded.value = true
                     repository.prefs.lastSyncAt = System.currentTimeMillis()
                 } else {
-                    _syncError.value = readableSyncError(res.exceptionOrNull())
+                    _syncError.value = res.exceptionOrNull().toAppError()
                 }
             } catch (e: CancellationException) {
                 // 协程取消不是同步失败，必须原样抛出
                 throw e
             } catch (e: Exception) {
-                _syncError.value = readableSyncError(e)
+                _syncError.value = e.toAppError()
             } finally {
                 _isSyncing.value = false
             }
@@ -175,8 +184,11 @@ class ExamsViewModel(private val repository: ScheduleRepository) : ViewModel() {
     }
 
     companion object {
+        // SavedStateHandle 的 key：进程被系统回收后冷启动要还原折叠状态
+        private const val KEY_SHOW_FINISHED_EXAMS = "exams_show_finished"
+
         fun factory(repository: ScheduleRepository): ViewModelProvider.Factory = viewModelFactory {
-            initializer { ExamsViewModel(repository) }
+            initializer { ExamsViewModel(repository, createSavedStateHandle()) }
         }
     }
 }

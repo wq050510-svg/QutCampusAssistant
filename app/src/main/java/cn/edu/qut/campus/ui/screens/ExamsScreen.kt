@@ -26,6 +26,7 @@ import cn.edu.qut.campus.data.repository.ScheduleRepository
 import cn.edu.qut.campus.ui.components.EmptyState
 import cn.edu.qut.campus.ui.components.ErrorState
 import cn.edu.qut.campus.ui.components.LoadingState
+import cn.edu.qut.campus.ui.components.textOrNull
 import cn.edu.qut.campus.ui.viewmodel.ExamsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,9 +49,12 @@ fun ExamsScreen(repository: ScheduleRepository) {
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 同步失败文案由 ViewModel 暴露（String?）；SnackbarHostState 属于 UI 层，仍留在页面里消费
+    // ViewModel 暴露的是 AppError（错误类型，不含文案）：文案由 UI 层映射。
+    // SnackbarHostState 属于 UI 层，仍留在页面里消费；effect 块不是 @Composable，
+    // 所以文案要在组合期先取好。
+    val syncErrorText = syncError.textOrNull()
     LaunchedEffect(syncError) {
-        syncError?.let { message -> snackbarHostState.showSnackbar(message) }
+        syncErrorText?.let { message -> snackbarHostState.showSnackbar(message) }
     }
 
     // 考试页原先没有任何刷新入口，只有登录流程会写入考试数据，这里给出显式刷新；
@@ -113,7 +117,7 @@ fun ExamsScreen(repository: ScheduleRepository) {
                 item {
                     Box(modifier = Modifier.fillParentMaxHeight(0.6f)) {
                         ErrorState(
-                            message = syncError ?: stringResource(R.string.exams_sync_failed_fallback),
+                            message = syncErrorText ?: stringResource(R.string.exams_sync_failed_fallback),
                             onRetry = { vm.refresh() }
                         )
                     }

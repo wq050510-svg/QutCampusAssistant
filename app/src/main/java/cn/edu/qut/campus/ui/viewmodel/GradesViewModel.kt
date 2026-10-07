@@ -1,13 +1,16 @@
 package cn.edu.qut.campus.ui.viewmodel
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import cn.edu.qut.campus.data.error.AppError
+import cn.edu.qut.campus.data.error.toAppError
 import cn.edu.qut.campus.data.model.Grade
 import cn.edu.qut.campus.data.repository.ScheduleRepository
-import cn.edu.qut.campus.ui.components.readableSyncError
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -30,9 +33,15 @@ private const val AUTO_SYNC_THROTTLE_MS = 30 * 60 * 1000L
  * when(currentTab) 切页，页面一离开组合状态就丢，切回来会重新走一遍自动同步。
  * 搬进 ViewModel 后，切 Tab / 旋屏（配置变更）都不再丢，且同步任务不会因为页面离开组合被取消。
  *
- * 只存放状态与业务调用，Toast / Snackbar 仍由页面负责：这里只暴露错误文案与一次性成功事件。
+ * 只存放状态与业务调用，Toast / Snackbar 仍由页面负责：这里只暴露错误类型与一次性成功事件。
+ *
+ * 用户的筛选选择（当前学期 / 去重开关）额外写进 [SavedStateHandle]：
+ * ViewModel 只能扛住配置变更与切 Tab，进程被回收后冷启动仍需恢复（原先靠 rememberSaveable）。
  */
-class GradesViewModel(private val repository: ScheduleRepository) : ViewModel() {
+class GradesViewModel(
+    private val repository: ScheduleRepository,
+    private val savedStateHandle: SavedStateHandle
+) : ViewModel() {
 
     /** 成绩列表（Room → Flow）。WhileSubscribed：页面不可见 5s 后停止订阅数据库 */
     val grades: StateFlow<List<Grade>> = repository.gradesFlow
@@ -43,10 +52,10 @@ class GradesViewModel(private val repository: ScheduleRepository) : ViewModel() 
     /** 是否正在刷新（右上角按钮转圈 / 按钮禁用都用它） */
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
-    private val _syncError = MutableStateFlow<String?>(null)
+    private val _syncError = MutableStateFlow<AppError?>(null)
 
-    /** 同步失败文案（页面用 LaunchedEffect 消费成 Snackbar，并在失败态卡片里展示） */
-    val syncError: StateFlow<String?> = _syncError.asStateFlow()
+    /** 同步失败原因（页面用 LaunchedEffect 消费成 Snackbar，并在失败态卡片里展示） */
+    val syncError: StateFlow<AppError?> = _syncError.asStateFlow()
 
     private val _syncSucceeded = MutableStateFlow(false)
     private val _syncTriggered = MutableStateFlow(false)
@@ -63,13 +72,13 @@ class GradesViewModel(private val repository: ScheduleRepository) : ViewModel() 
     /** 一次性「成绩同步成功」事件：页面消费后调用 [consumeSyncSuccess]，旋屏不会重复弹 */
     val syncSuccessEvent: StateFlow<Boolean> = _syncSuccessEvent.asStateFlow()
 
-    /** 重修覆盖去重模式（默认启用：重修通过后只保留通过后的最高成绩） */
-    private val _isDeduplicated = MutableStateFlow(true)
-    val isDeduplicated: StateFlow<Boolean> = _isDeduplicated.asStateFlow()
+    /** 重修覆盖去重模式（默认启用：重修通过后只保留通过后的最高成绩）；持久化 */
+    val isDeduplicated: StateFlow<Boolean> =
+        savedStateHandle.getStateFlow(KEY_IS_DEDUPLICATED, true)
 
-    /** 当前选中的学期筛选（[SEMESTER_ALL] 表示不筛选） */
-    private val _selectedSemester = MutableStateFlow(SEMESTER_ALL)
-    val selectedSemester: StateFlow<String> = _selectedSemester.asStateFlow()
+    /** 当前选中的学期筛选（[SEMESTER_ALL] 表示不筛选）；持久化 */
+    val selectedSemester: StateFlow<String> =
+        savedStateHandle.getStateFlow(KEY_SELECTED_SEMESTER, SEMESTER_ALL)
 
     /**
      * 本次 App 会话内是否已经自动同步过。
@@ -83,11 +92,11 @@ class GradesViewModel(private val repository: ScheduleRepository) : ViewModel() 
     }
 
     fun toggleDeduplicated() {
-        _isDeduplicated.value = !_isDeduplicated.value
+        savedStateHandle[KEY_IS_DEDUPLICATED] = !isDeduplicated.value
     }
 
     fun selectSemester(semester: String) {
-        _selectedSemester.value = semester
+        savedStateHandle[KEY_SELECTED_SEMESTER] = semester
     }
 
     /**
@@ -124,13 +133,13 @@ class GradesViewModel(private val repository: ScheduleRepository) : ViewModel() 
                         _syncSuccessEvent.value = true
                     }
                 } else {
-                    _syncError.value = readableSyncError(err)
+                    _syncError.value = err.toAppError()
                 }
             } catch (e: CancellationException) {
                 // 协程取消不是「同步失败」，必须原样抛出，否则会把页面销毁误报成网络错误
                 throw e
             } catch (e: Exception) {
-                _syncError.value = readableSyncError(e)
+                _syncError.value = e.toAppError()
             } finally {
                 _isRefreshing.value = false
             }
@@ -144,8 +153,12 @@ class GradesViewModel(private val repository: ScheduleRepository) : ViewModel() 
          */
         const val SEMESTER_ALL = "全部学期"
 
+        // SavedStateHandle 的 key：进程被系统回收后冷启动要还原用户上次的筛选
+        private const val KEY_SELECTED_SEMESTER = "grades_selected_semester"
+        private const val KEY_IS_DEDUPLICATED = "grades_is_deduplicated"
+
         fun factory(repository: ScheduleRepository): ViewModelProvider.Factory = viewModelFactory {
-            initializer { GradesViewModel(repository) }
+            initializer { GradesViewModel(repository, createSavedStateHandle()) }
         }
     }
 }

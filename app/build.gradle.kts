@@ -15,8 +15,8 @@ android {
         applicationId = "cn.edu.qut.campus"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.3.1"
+        versionCode = 6
+        versionName = "1.3.2"
 
         // 只保留中英文资源：AndroidX / Material / 旧版 Glance 会带进 80 种语言，
         // 裁剪后 resources.arsc 明显变小（实测 APK 内语言数从 80 → 2）
