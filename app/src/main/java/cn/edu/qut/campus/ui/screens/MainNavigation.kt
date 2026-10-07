@@ -1,6 +1,7 @@
 package cn.edu.qut.campus.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
@@ -13,14 +14,20 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
+import cn.edu.qut.campus.R
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 
-enum class ScreenTab(val title: String, val icon: ImageVector) {
-    SCHEDULE("课表", Icons.Default.CalendarToday),
-    EXAMS("考试", Icons.Default.EventNote),
-    GRADES("成绩", Icons.Default.Assessment),
-    ACADEMIC("学业", Icons.Default.School),
-    PROFILE("我的", Icons.Default.Person)
+/**
+ * 底部导航项。标题以字符串资源 id 保存（枚举构造参数不是 composable，
+ * 不能在构造期解析文案），UI 侧统一用 stringResource(tab.titleRes) 取文案。
+ */
+enum class ScreenTab(@StringRes val titleRes: Int, val icon: ImageVector) {
+    SCHEDULE(R.string.nav_tab_schedule, Icons.Default.CalendarToday),
+    EXAMS(R.string.nav_tab_exams, Icons.Default.EventNote),
+    GRADES(R.string.nav_tab_grades, Icons.Default.Assessment),
+    ACADEMIC(R.string.nav_tab_academic, Icons.Default.School),
+    PROFILE(R.string.nav_tab_profile, Icons.Default.Person)
 }
 
 @Composable
@@ -55,8 +62,8 @@ fun MainScreen(
                 NavigationBar {
                     ScreenTab.entries.forEach { tab ->
                         NavigationBarItem(
-                            icon = { Icon(tab.icon, contentDescription = tab.title) },
-                            label = { Text(tab.title) },
+                            icon = { Icon(tab.icon, contentDescription = stringResource(tab.titleRes)) },
+                            label = { Text(stringResource(tab.titleRes)) },
                             selected = currentTab == tab,
                             onClick = { currentTab = tab }
                         )

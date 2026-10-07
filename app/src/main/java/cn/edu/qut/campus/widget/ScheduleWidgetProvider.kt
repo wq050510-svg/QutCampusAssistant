@@ -34,15 +34,20 @@ class ScheduleWidgetProvider : AppWidgetProvider() {
         private const val MIN_DAY_OFFSET = -1
         private const val MAX_DAY_OFFSET = 1
 
-        /** 相对日期中文名，key 为 dayOffset */
-        private val OFFSET_NAMES = mapOf(-1 to "昨日", 0 to "今日", 1 to "明日")
+        /** 相对日期文案资源 id，key 为 dayOffset */
+        private val OFFSET_NAME_RES = mapOf(
+            -1 to R.string.widget_offset_yesterday,
+            0 to R.string.widget_offset_today,
+            1 to R.string.widget_offset_tomorrow
+        )
 
         private const val REQ_PREV_DAY = 1
         private const val REQ_NEXT_DAY = 2
         private const val REQ_REFRESH = 3
         private const val REQ_OPEN_APP = 4
 
-        private fun offsetName(offset: Int): String = OFFSET_NAMES[offset] ?: "今日"
+        private fun offsetName(context: Context, offset: Int): String =
+            context.getString(OFFSET_NAME_RES[offset] ?: R.string.widget_offset_today)
     }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
@@ -104,7 +109,7 @@ class ScheduleWidgetProvider : AppWidgetProvider() {
         // 偏移量持久化在 AppPreferences，进程被杀后不会归零
         val dayOffset = prefs.widgetDayOffset.coerceIn(MIN_DAY_OFFSET, MAX_DAY_OFFSET)
         // 作息时间随用户选择的校区变化，与 App 内保持一致
-        val campus = prefs.campus.ifBlank { "黄岛校区" }
+        val campus = prefs.campus.ifBlank { context.getString(R.string.campus_huangdao) }
 
         val targetDate = LocalDate.now().plusDays(dayOffset.toLong())
         val dateFormatter = DateTimeFormatter.ofPattern("yyyy/M/d")
@@ -117,7 +122,7 @@ class ScheduleWidgetProvider : AppWidgetProvider() {
 
         val dayOfWeekInt = targetDate.dayOfWeek.value // 1 (周一) 至 7 (周日)
         // 学期名由开学日期推导（如 2026-2027-1），不再写死年级
-        val subtitle = "${prefs.termLabel} | 第${weekNumber}周 ${dayNameOf(dayOfWeekInt)}"
+        val subtitle = "${prefs.termLabel} | ${context.getString(R.string.widget_week_n, weekNumber)} ${dayNameOf(dayOfWeekInt)}"
 
         views.setTextViewText(R.id.tv_widget_date, dateString)
         views.setTextViewText(R.id.tv_widget_sub, subtitle)
@@ -226,14 +231,20 @@ class ScheduleWidgetProvider : AppWidgetProvider() {
             views.setViewVisibility(R.id.btn_widget_prev_day, View.INVISIBLE)
         } else {
             views.setViewVisibility(R.id.btn_widget_prev_day, View.VISIBLE)
-            views.setTextViewText(R.id.btn_widget_prev_day, "← ${offsetName(prevTarget)}")
+            views.setTextViewText(
+                R.id.btn_widget_prev_day,
+                context.getString(R.string.widget_button_prev_to, offsetName(context, prevTarget))
+            )
         }
 
         if (nextTarget == dayOffset) {
             views.setViewVisibility(R.id.btn_widget_toggle_day, View.INVISIBLE)
         } else {
             views.setViewVisibility(R.id.btn_widget_toggle_day, View.VISIBLE)
-            views.setTextViewText(R.id.btn_widget_toggle_day, "${offsetName(nextTarget)} →")
+            views.setTextViewText(
+                R.id.btn_widget_toggle_day,
+                context.getString(R.string.widget_button_next_to, offsetName(context, nextTarget))
+            )
         }
     }
 

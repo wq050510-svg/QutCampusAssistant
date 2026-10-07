@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.provider.CalendarContract
+import cn.edu.qut.campus.R
 import cn.edu.qut.campus.data.local.AppPreferences
 import cn.edu.qut.campus.data.model.CampusPeriod
 import cn.edu.qut.campus.data.model.Course
@@ -43,7 +44,7 @@ class CalendarSyncManager(private val context: Context) {
 
     // 获取或创建青岛理工专属日历账户
     private fun getOrCreateCalendarId(campus: String = "黄岛校区"): Long {
-        val calendarDisplayName = "青岛理工大学($campus)课表"
+        val calendarDisplayName = context.getString(R.string.calendar_account_display_name, campus)
         val uri = CalendarContract.Calendars.CONTENT_URI
         val projection = arrayOf(CalendarContract.Calendars._ID)
         val selection = "(${CalendarContract.Calendars.ACCOUNT_NAME} = ? AND ${CalendarContract.Calendars.ACCOUNT_TYPE} = ?)"
@@ -114,7 +115,7 @@ class CalendarSyncManager(private val context: Context) {
 
             val calId = getOrCreateCalendarId(campus)
             if (calId == -1L) {
-                return@withContext Result.failure(Exception("无法访问或创建系统日历账户"))
+                return@withContext Result.failure(Exception(context.getString(R.string.calendar_error_no_account)))
             }
 
             // ---------- 第一步：纯计算，先把所有事件构建好（此阶段不产生任何写入） ----------
@@ -146,10 +147,17 @@ class CalendarSyncManager(private val context: Context) {
                     )
 
                     pendingEvents += CalendarEvent(
-                        title = "[青理] ${course.name}",
+                        title = context.getString(R.string.calendar_event_title, course.name),
                         location = "${course.classroom} (${course.teacher})",
-                        description = "校区：$campus\n教室：${course.classroom}\n教师：${course.teacher}\n" +
-                            "节次：第${course.startPeriod}-${course.endPeriod}节\n学分：${course.credit}",
+                        description = context.getString(
+                            R.string.calendar_event_description,
+                            campus,
+                            course.classroom,
+                            course.teacher,
+                            course.startPeriod,
+                            course.endPeriod,
+                            course.credit
+                        ),
                         startMillis = startDateTime.atZone(zone).toInstant().toEpochMilli(),
                         endMillis = endDateTime.atZone(zone).toInstant().toEpochMilli()
                     )
@@ -195,7 +203,7 @@ class CalendarSyncManager(private val context: Context) {
             }
 
             if (eventCount == 0 && pendingEvents.isNotEmpty()) {
-                Result.failure(Exception("课程事件写入系统日历失败，请检查日历权限"))
+                Result.failure(Exception(context.getString(R.string.calendar_error_write_failed)))
             } else {
                 Result.success(eventCount)
             }

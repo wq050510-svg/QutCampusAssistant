@@ -16,7 +16,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -26,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cn.edu.qut.campus.R
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 import cn.edu.qut.campus.ui.components.readableSyncError
 import kotlinx.coroutines.launch
@@ -52,6 +55,8 @@ fun LoginScreen(
     var showPrivacyDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+    // 供非 composable 的 performLogin 闭包解析字符串资源（该闭包会被 onClick 与 ImeAction 调用）
+    val context = LocalContext.current
 
     // 登录逻辑抽成闭包，供「登录按钮」与密码框 ImeAction.Done 共用
     val performLogin: () -> Unit = {
@@ -59,11 +64,11 @@ fun LoginScreen(
         val pwd = password
 
         val accountError = when {
-            account.isEmpty() -> "请输入学号"
-            account.length < MIN_ACCOUNT_LENGTH -> "学号格式看起来不对，请检查"
+            account.isEmpty() -> context.getString(R.string.login_error_empty_id)
+            account.length < MIN_ACCOUNT_LENGTH -> context.getString(R.string.login_error_invalid_id)
             else -> null
         }
-        val pwdError = if (pwd.isEmpty()) "请输入密码" else null
+        val pwdError = if (pwd.isEmpty()) context.getString(R.string.login_error_empty_password) else null
 
         studentIdError = accountError
         passwordError = pwdError
@@ -119,7 +124,7 @@ fun LoginScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.School,
-                    contentDescription = "Logo",
+                    contentDescription = stringResource(R.string.login_logo_desc),
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(40.dp)
                 )
@@ -128,12 +133,12 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "青岛理工大学",
+                text = stringResource(R.string.common_school_name),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "智能课表与校园助手 • 青理双校区支持",
+                text = stringResource(R.string.login_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)
@@ -162,7 +167,7 @@ fun LoginScreen(
                         },
                         text = {
                             Text(
-                                "统一身份认证",
+                                stringResource(R.string.login_tab_sso),
                                 fontWeight = if (isSsoLogin) FontWeight.Bold else FontWeight.Normal
                             )
                         }
@@ -177,7 +182,7 @@ fun LoginScreen(
                         },
                         text = {
                             Text(
-                                "教务直接登录",
+                                stringResource(R.string.login_tab_zf),
                                 fontWeight = if (!isSsoLogin) FontWeight.Bold else FontWeight.Normal
                             )
                         }
@@ -188,7 +193,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = if (isSsoLogin) "青理统一身份认证 (sso.qut.edu.cn)" else "青理正方教务系统 (jxgl.qut.edu.cn)",
+                text = if (isSsoLogin) stringResource(R.string.login_endpoint_sso) else stringResource(R.string.login_endpoint_zf),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
                 textAlign = TextAlign.Center
@@ -204,7 +209,7 @@ fun LoginScreen(
                     studentIdError = null
                     errorMessage = null
                 },
-                label = { Text(if (isSsoLogin) "统一认证账号 (学号/工号)" else "教务学号") },
+                label = { Text(if (isSsoLogin) stringResource(R.string.login_label_account_sso) else stringResource(R.string.login_label_account_zf)) },
                 leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                 singleLine = true,
                 isError = studentIdError != null,
@@ -231,13 +236,13 @@ fun LoginScreen(
                     passwordError = null
                     errorMessage = null
                 },
-                label = { Text(if (isSsoLogin) "统一认证密码" else "教务处密码") },
+                label = { Text(if (isSsoLogin) stringResource(R.string.login_label_password_sso) else stringResource(R.string.login_label_password_zf)) },
                 leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                 trailingIcon = {
                     IconButton(onClick = { passwordVisible = !passwordVisible }) {
                         Icon(
                             imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                            contentDescription = if (passwordVisible) "隐藏密码" else "显示密码"
+                            contentDescription = if (passwordVisible) stringResource(R.string.login_action_hide_password) else stringResource(R.string.login_action_show_password)
                         )
                     }
                 },
@@ -282,16 +287,16 @@ fun LoginScreen(
                         strokeWidth = 2.dp
                     )
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("正在极速抓包同步课表...")
+                    Text(stringResource(R.string.login_syncing))
                 } else {
-                    Text("一键极速同步课表与学业", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.login_submit), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = if (isSsoLogin) "账号密码仅在本地处理，直连青理统一身份认证系统" else "密码仅保存在本机，直连青理正方 V9 系统",
+                text = if (isSsoLogin) stringResource(R.string.login_privacy_hint_sso) else stringResource(R.string.login_privacy_hint_zf),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center
@@ -299,7 +304,7 @@ fun LoginScreen(
 
             TextButton(onClick = { showPrivacyDialog = true }) {
                 Text(
-                    text = "隐私与数据使用说明",
+                    text = stringResource(R.string.login_privacy_title),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -310,28 +315,27 @@ fun LoginScreen(
         val bodyStyle = MaterialTheme.typography.bodySmall
         AlertDialog(
             onDismissRequest = { showPrivacyDialog = false },
-            title = { Text("隐私与数据使用说明") },
+            title = { Text(stringResource(R.string.login_privacy_title)) },
             text = {
                 Column {
                     Text(
-                        text = "① 你输入的学号与密码，仅用于直连青岛理工大学教务系统与统一身份认证系统，" +
-                            "不会上传到任何第三方服务器。",
+                        text = stringResource(R.string.login_privacy_body_1),
                         style = bodyStyle
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "② 密码在本机经系统级密钥加密保存，仅用于自动重新登录；退出登录时会一并清除。",
+                        text = stringResource(R.string.login_privacy_body_2),
                         style = bodyStyle
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "③ 本应用非学校官方应用，数据以教务系统为准，仅供个人查询课表、成绩与考试使用。",
+                        text = stringResource(R.string.login_privacy_body_3),
                         style = bodyStyle
                     )
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showPrivacyDialog = false }) { Text("我知道了") }
+                TextButton(onClick = { showPrivacyDialog = false }) { Text(stringResource(R.string.common_got_it)) }
             }
         )
     }

@@ -1,7 +1,7 @@
 # 青理校园助手 (QUT Campus Assistant)
 > 专为青岛理工大学学生定制的现代化校园综合服务 App（支持 Android 8.0+ 及现代 Material You）
 
-当前版本：**v1.3.0**（versionCode 4）｜ 详见 [RELEASE_NOTES_v1.3.0.md](RELEASE_NOTES_v1.3.0.md)
+当前版本：**v1.3.1**（versionCode 5）｜ 详见 [RELEASE_NOTES_v1.3.1.md](RELEASE_NOTES_v1.3.1.md) 与 [RELEASE_NOTES_v1.3.0.md](RELEASE_NOTES_v1.3.0.md)
 
 ---
 
@@ -68,6 +68,7 @@ QutCampusAssistant/
  │    │    │    └── ui/
  │    │    │         ├── components/         # 公共组件 (StateViews 三态、CampusPickerDialog)
  │    │    │         ├── theme/              # Material 3 主题、莫兰迪配色与深色模式
+ │    │    │         ├── viewmodel/          # 页面状态持有者 (Schedule/Grades/Exams ViewModel)
  │    │    │         ├── screens/            # 登录、课表、日历、考试、成绩、学业、我的
  │    │    │         └── MainActivity.kt     # 入口 Activity
  │    │    └── res/                          # 图标（自适应 launcher）、小组件布局、主题、字符串

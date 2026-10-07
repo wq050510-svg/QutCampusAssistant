@@ -1,7 +1,6 @@
 package cn.edu.qut.campus.ui.screens
 
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -13,29 +12,23 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import cn.edu.qut.campus.R
 import cn.edu.qut.campus.data.model.Grade
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 import cn.edu.qut.campus.ui.components.EmptyState
 import cn.edu.qut.campus.ui.components.ErrorState
 import cn.edu.qut.campus.ui.components.LoadingState
-import cn.edu.qut.campus.ui.components.readableSyncError
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
-
-/**
- * 自动同步节流窗口：距上次成功同步未超过该时长且本地已有缓存时，
- * 切回成绩 Tab 不再重复请求教务系统（避免每次切 Tab 都白等一次网络往返）。
- */
-private const val AUTO_SYNC_THROTTLE_MS = 30 * 60 * 1000L
+import cn.edu.qut.campus.ui.viewmodel.GradesViewModel
 
 /**
  * 把 Grade 和只算一次的通过判定绑定在一起。
@@ -48,69 +41,40 @@ private data class GradedGrade(val grade: Grade, val passed: Boolean)
 @Composable
 fun GradesScreen(repository: ScheduleRepository) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
-    val grades by repository.gradesFlow.collectAsStateWithLifecycle(initialValue = emptyList())
-    var isRefreshing by remember { mutableStateOf(false) }
+    // 状态与同步逻辑都在 ViewModel 里：切 Tab / 旋屏不再丢（原先 remember 会全部重置）
+    val vm: GradesViewModel = viewModel(factory = GradesViewModel.factory(repository))
 
+    val grades by vm.grades.collectAsStateWithLifecycle()
+    val isRefreshing by vm.isRefreshing.collectAsStateWithLifecycle()
     // 三态互斥：syncing(加载中) / syncError(失败) / syncSucceeded+空列表(确实没有数据)
-    var syncError by remember { mutableStateOf<String?>(null) }
-    var syncSucceeded by remember { mutableStateOf(false) }
+    val syncInProgress by vm.syncInProgress.collectAsStateWithLifecycle()
+    val syncError by vm.syncError.collectAsStateWithLifecycle()
+    val syncSuccessEvent by vm.syncSuccessEvent.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 本次进入页面是否已经自动同步过（rememberSaveable：旋转/重建后不重复打扰教务系统）
-    var autoSyncDone by rememberSaveable { mutableStateOf(false) }
-    // 本次进入是否真的发起了同步（节流命中时为 false，此时不能一直显示加载中）
-    var syncTriggered by remember { mutableStateOf(false) }
+    // 同步失败文案由 ViewModel 暴露（String?）；SnackbarHostState 属于 UI 层，仍留在页面里消费
+    LaunchedEffect(syncError) {
+        syncError?.let { message -> snackbarHostState.showSnackbar(message) }
+    }
 
-    // 同步中（含本次进入还没跑过自动同步的首帧，避免先闪一帧空状态）
-    fun syncInProgress(): Boolean = isRefreshing || (syncTriggered && !syncSucceeded && syncError == null)
-
-    suspend fun doSync(showSuccessToast: Boolean) {
-        if (syncInProgress()) return
-        isRefreshing = true
-        try {
-            val res = repository.syncGrades()
-            val err = res.exceptionOrNull()
-            if (res.isSuccess) {
-                syncError = null
-                syncSucceeded = true
-                repository.prefs.lastSyncAt = System.currentTimeMillis()
-                if (showSuccessToast) {
-                    Toast.makeText(context, "成绩同步成功", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                syncError = readableSyncError(err)
-                snackbarHostState.showSnackbar(syncError ?: "成绩同步失败")
-            }
-        } catch (e: CancellationException) {
-            // 协程取消不是「同步失败」，必须原样抛出，否则会把页面销毁误报成网络错误
-            throw e
-        } catch (e: Exception) {
-            syncError = readableSyncError(e)
-            snackbarHostState.showSnackbar(syncError ?: "成绩同步失败")
-        } finally {
-            isRefreshing = false
+    // 手动同步成功的一次性 Toast 事件：消费后立即清除，旋屏不会重复弹
+    LaunchedEffect(syncSuccessEvent) {
+        if (syncSuccessEvent) {
+            Toast.makeText(context, context.getString(R.string.grades_sync_success), Toast.LENGTH_SHORT).show()
+            vm.consumeSyncSuccess()
         }
     }
 
-    // 自动同步策略：本次进入只自动同步一次（rememberSaveable），
-    // 且距上次成功同步未超过节流窗口且本地已有数据时不再重复打教务系统。
+    // 自动同步策略：本次会话只自动同步一次（原先用 rememberSaveable，切 Tab 会丢失）
     LaunchedEffect(Unit) {
-        if (!autoSyncDone) {
-            autoSyncDone = true
-            val localEmpty = grades.isEmpty()
-            val stale = System.currentTimeMillis() - repository.prefs.lastSyncAt > AUTO_SYNC_THROTTLE_MS
-            if (localEmpty || stale) {
-                syncTriggered = true
-                doSync(showSuccessToast = false)
-            }
-        }
+        vm.autoSyncIfNeeded()
     }
 
     // 是否启用重修覆盖去重模式（默认启用：重修通过后只保留通过后的最高成绩）
-    var isDeduplicated by remember { mutableStateOf(true) }
-    var selectedSemester by remember { mutableStateOf("全部学期") }
+    // 与学期筛选一起搬进 ViewModel：切 Tab 回来不再被重置
+    val isDeduplicated by vm.isDeduplicated.collectAsStateWithLifecycle()
+    val selectedSemester by vm.selectedSemester.collectAsStateWithLifecycle()
 
     // 基础成绩列表（根据是否去重切换）
     val baseGrades = remember(grades, isDeduplicated) {
@@ -123,12 +87,18 @@ fun GradesScreen(repository: ScheduleRepository) {
     }
 
     val semesters = remember(baseGrades) {
-        listOf("全部学期") + baseGrades.map { "${it.academicYear}-${it.semester}" }.distinct().sortedDescending()
+        listOf(GradesViewModel.SEMESTER_ALL) + baseGrades.map { "${it.academicYear}-${it.semester}" }.distinct().sortedDescending()
+    }
+
+    // 学期筛选现在由 ViewModel 持有（不再随切 Tab 重置）：万一本地数据被清空/换学期后
+    // 停在一个已不存在的学期上，兜底回到「全部学期」，避免列表永远空白
+    LaunchedEffect(semesters) {
+        if (selectedSemester !in semesters) vm.selectSemester(GradesViewModel.SEMESTER_ALL)
     }
 
     // 按学期过滤
     val filteredRows = remember(gradedRows, selectedSemester) {
-        if (selectedSemester == "全部学期") gradedRows
+        if (selectedSemester == GradesViewModel.SEMESTER_ALL) gradedRows
         else gradedRows.filter { "${it.grade.academicYear}-${it.grade.semester}" == selectedSemester }
     }
 
@@ -150,9 +120,13 @@ fun GradesScreen(repository: ScheduleRepository) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("学生成绩查询", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.grades_title), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text(
-                            text = if (isDeduplicated) "已开启重修覆盖去重 (仅保留最终有效成绩)" else "显示全部历次考试记录 (含未通过重修)",
+                            text = if (isDeduplicated) {
+                                stringResource(R.string.grades_subtitle_deduplicated)
+                            } else {
+                                stringResource(R.string.grades_subtitle_all)
+                            },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -160,17 +134,13 @@ fun GradesScreen(repository: ScheduleRepository) {
                 },
                 actions = {
                     IconButton(
-                        onClick = {
-                            coroutineScope.launch {
-                                doSync(showSuccessToast = true)
-                            }
-                        },
+                        onClick = { vm.refresh() },
                         enabled = !isRefreshing
                     ) {
                         if (isRefreshing) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         } else {
-                            Icon(Icons.Default.Refresh, contentDescription = "刷新成绩")
+                            Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.grades_refresh_desc))
                         }
                     }
                 }
@@ -193,10 +163,14 @@ fun GradesScreen(repository: ScheduleRepository) {
             ) {
                 FilterChip(
                     selected = isDeduplicated,
-                    onClick = { isDeduplicated = !isDeduplicated },
+                    onClick = { vm.toggleDeduplicated() },
                     label = {
                         Text(
-                            text = if (isDeduplicated) "✓ 重修已去重" else "全部考试记录",
+                            text = if (isDeduplicated) {
+                                stringResource(R.string.grades_chip_deduplicated)
+                            } else {
+                                stringResource(R.string.grades_chip_all)
+                            },
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -211,8 +185,8 @@ fun GradesScreen(repository: ScheduleRepository) {
                 semesters.forEach { sem ->
                     FilterChip(
                         selected = sem == selectedSemester,
-                        onClick = { selectedSemester = sem },
-                        label = { Text(sem, fontSize = 12.sp) },
+                        onClick = { vm.selectSemester(sem) },
+                        label = { Text(if (sem == GradesViewModel.SEMESTER_ALL) stringResource(R.string.grades_semester_all) else sem, fontSize = 12.sp) },
                         shape = RoundedCornerShape(8.dp)
                     )
                 }
@@ -234,7 +208,7 @@ fun GradesScreen(repository: ScheduleRepository) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("已获有效学分", fontSize = 13.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text(stringResource(R.string.grades_valid_credits), fontSize = 13.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = String.format("%.1f", totalCredits),
@@ -242,7 +216,7 @@ fun GradesScreen(repository: ScheduleRepository) {
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
-                        Text("考核通过科目累计", fontSize = 10.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+                        Text(stringResource(R.string.grades_valid_credits_hint), fontSize = 10.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
                     }
                     VerticalDivider(
                         modifier = Modifier
@@ -251,16 +225,20 @@ fun GradesScreen(repository: ScheduleRepository) {
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
                     )
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("待重修 / 待补考", fontSize = 13.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text(stringResource(R.string.grades_failed_title), fontSize = 13.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = if (failedCount == 0) "0 门" else "$failedCount 门",
+                            text = stringResource(R.string.grades_failed_count, failedCount),
                             fontSize = 28.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (failedCount > 0) Color(0xFFD32F2F) else MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            text = if (failedCount == 0) "全部科目已通过" else "需关注补考/重修安排",
+                            text = if (failedCount == 0) {
+                                stringResource(R.string.grades_all_passed)
+                            } else {
+                                stringResource(R.string.grades_failed_hint)
+                            },
                             fontSize = 10.sp,
                             color = if (failedCount > 0) Color(0xFFD32F2F).copy(alpha = 0.8f) else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                         )
@@ -271,7 +249,7 @@ fun GradesScreen(repository: ScheduleRepository) {
             // 统计说明条
             if (isDeduplicated) {
                 Text(
-                    text = "注：已自动过滤被重修/补考覆盖的历史不及格记录，学分与门数无重复计算。",
+                    text = stringResource(R.string.grades_dedup_note),
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 2.dp)
@@ -279,25 +257,21 @@ fun GradesScreen(repository: ScheduleRepository) {
             }
 
             // 成绩内容区域：加载中 / 同步失败 / 确实无数据 三态严格区分，不共用同一张空状态卡
-            val loading = filteredGrades.isEmpty() && syncInProgress()
+            val loading = filteredGrades.isEmpty() && syncInProgress
             val failed = syncError != null && filteredGrades.isEmpty()
             if (loading && !failed) {
-                LoadingState(message = "正在直连正方教务系统同步历年成绩...")
+                LoadingState(message = stringResource(R.string.grades_loading))
             } else if (failed) {
                 ErrorState(
-                    message = syncError ?: "成绩同步失败，请稍后重试",
-                    onRetry = {
-                        coroutineScope.launch { doSync(showSuccessToast = true) }
-                    }
+                    message = syncError ?: stringResource(R.string.grades_sync_failed_fallback),
+                    onRetry = { vm.refresh() }
                 )
             } else if (filteredGrades.isEmpty()) {
                 EmptyState(
-                    title = "暂无成绩记录",
-                    description = "教务系统本次返回的成绩为空，可点击下方按钮重新同步历年成绩",
-                    actionLabel = "点击立即同步教务处成绩",
-                    onAction = {
-                        coroutineScope.launch { doSync(showSuccessToast = true) }
-                    }
+                    title = stringResource(R.string.grades_empty_title),
+                    description = stringResource(R.string.grades_empty_desc),
+                    actionLabel = stringResource(R.string.grades_empty_action),
+                    onAction = { vm.refresh() }
                 )
             } else {
                 // 成绩明细列表
@@ -365,7 +339,7 @@ fun GradeItemCard(grade: Grade, passed: Boolean) {
                             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
                         ) {
                             Text(
-                                text = "通过",
+                                text = stringResource(R.string.grades_badge_passed),
                                 color = MaterialTheme.colorScheme.primary,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
@@ -377,7 +351,7 @@ fun GradeItemCard(grade: Grade, passed: Boolean) {
 
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "${grade.academicYear} 第${grade.semester}学期 • ${grade.credit}学分 • ${grade.courseType}",
+                    text = stringResource(R.string.grades_course_meta, grade.academicYear, grade.semester, grade.credit, grade.courseType),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -391,7 +365,11 @@ fun GradeItemCard(grade: Grade, passed: Boolean) {
                     color = if (passed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                 )
                 Text(
-                    text = if (passed) "已获 ${grade.credit} 学分" else "未获学分",
+                    text = if (passed) {
+                        stringResource(R.string.academic_earned_credits, grade.credit)
+                    } else {
+                        stringResource(R.string.grades_not_earned)
+                    },
                     fontSize = 11.sp,
                     color = if (passed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
                 )

@@ -20,9 +20,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cn.edu.qut.campus.R
 import cn.edu.qut.campus.data.model.CampusPeriod
 
 /**
@@ -53,11 +55,11 @@ fun CampusPickerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("切换就读校区") },
+        title = { Text(stringResource(R.string.common_campus_picker_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "选择您的就读校区，将自动联动课表、日历同步与考场地点信息：",
+                    text = stringResource(R.string.common_campus_picker_desc),
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -113,13 +115,18 @@ fun CampusPickerDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("关闭")
+                Text(stringResource(R.string.common_close))
             }
         }
     )
 }
 
 /** 校区对应的门牌路名，仅用于弹窗内的次要说明文字 */
+@Composable
 private fun campusRoadName(campusName: String): String {
-    return if (campusName.contains("市北")) "抚顺路" else "嘉陵江东路"
+    return if (campusName.contains("市北")) {
+        stringResource(R.string.common_campus_road_shibei)
+    } else {
+        stringResource(R.string.common_campus_road_huangdao)
+    }
 }

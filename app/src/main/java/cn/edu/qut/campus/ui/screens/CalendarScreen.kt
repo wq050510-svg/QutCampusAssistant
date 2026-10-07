@@ -20,11 +20,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import cn.edu.qut.campus.R
 import cn.edu.qut.campus.data.local.AppPreferences
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 import cn.edu.qut.campus.service.CalendarSyncManager
@@ -54,7 +56,8 @@ fun CalendarScreen(
     var isSyncing by remember { mutableStateOf(false) }
 
     // P1: 校区改用 Flow 驱动，避免组合期快照导致切到市北后本页标题仍显示黄岛
-    val campus = prefs.campusFlow.collectAsStateWithLifecycle().value.ifEmpty { "黄岛校区" }
+    val fallbackCampus = stringResource(R.string.campus_huangdao)
+    val campus = prefs.campusFlow.collectAsStateWithLifecycle().value.ifEmpty { fallbackCampus }
 
     // 打开本应用的系统设置页，供权限被拒绝时引导用户手动开启
     fun openAppSettings() {
@@ -86,13 +89,25 @@ fun CalendarScreen(
                 )
                 if (result.isSuccess) {
                     snackbarHostState.showSnackbar(
-                        "同步成功！已将 ${result.getOrNull()} 节${campus}课程写入手机日历，并开启提前 ${minutes} 分钟提醒"
+                        context.getString(
+                            R.string.calendar_sync_success,
+                            result.getOrNull() ?: 0,
+                            campus,
+                            minutes
+                        )
                     )
                 } else {
-                    snackbarHostState.showSnackbar("同步失败：${readableSyncError(result.exceptionOrNull())}")
+                    snackbarHostState.showSnackbar(
+                        context.getString(
+                            R.string.common_sync_failed,
+                            readableSyncError(result.exceptionOrNull())
+                        )
+                    )
                 }
             } catch (e: Exception) {
-                snackbarHostState.showSnackbar("同步失败：${readableSyncError(e)}")
+                snackbarHostState.showSnackbar(
+                    context.getString(R.string.common_sync_failed, readableSyncError(e))
+                )
             } finally {
                 isSyncing = false
             }
@@ -110,8 +125,8 @@ fun CalendarScreen(
         } else {
             scope.launch {
                 val action = snackbarHostState.showSnackbar(
-                    message = "未获得日历读写权限，无法把课表写入手机日历",
-                    actionLabel = "去设置",
+                    message = context.getString(R.string.calendar_permission_denied),
+                    actionLabel = context.getString(R.string.calendar_go_settings),
                     withDismissAction = true,
                     duration = SnackbarDuration.Long
                 )
@@ -125,10 +140,10 @@ fun CalendarScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("手机日历智能同步") },
+                title = { Text(stringResource(R.string.calendar_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 }
             )
@@ -162,7 +177,7 @@ fun CalendarScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "青岛理工大学课表日历联动",
+                text = stringResource(R.string.calendar_hero_title),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
@@ -170,7 +185,7 @@ fun CalendarScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "通过 Android 系统级 CalendarProvider，将全学期每节课按单双周精准写入系统日历，支持手机负一屏速览与系统级准时提醒。",
+                text = stringResource(R.string.calendar_hero_desc),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 lineHeight = 20.sp
@@ -192,7 +207,7 @@ fun CalendarScreen(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = "独立日历本隔离：将在日历中创建独立的【青岛理工大学(${campus})课表】，随时可一键重写或清空，绝不污染您的个人私人日程。",
+                        text = stringResource(R.string.calendar_isolation_hint, campus),
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -203,7 +218,7 @@ fun CalendarScreen(
 
             // 提醒时间选择器
             Text(
-                text = "上课前提前提醒时长：",
+                text = stringResource(R.string.calendar_reminder_label),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -221,7 +236,7 @@ fun CalendarScreen(
                         onClick = { applyReminderMinutes(min) },
                         label = {
                             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                Text("$min 分钟", fontSize = 11.sp, maxLines = 1)
+                                Text(stringResource(R.string.common_minutes_count, min), fontSize = 11.sp, maxLines = 1)
                             }
                         },
                         shape = RoundedCornerShape(8.dp),
@@ -254,11 +269,11 @@ fun CalendarScreen(
                 if (isSyncing) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text("正在同步计算全学期日程...")
+                    Text(stringResource(R.string.calendar_syncing))
                 } else {
                     Icon(Icons.Default.Sync, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("立即一键同步至系统日历")
+                    Text(stringResource(R.string.calendar_sync_button))
                 }
             }
 
@@ -270,9 +285,11 @@ fun CalendarScreen(
                     scope.launch {
                         try {
                             syncManager.clearCalendar(campus)
-                            snackbarHostState.showSnackbar("已成功清空系统日历中的青理课表日程")
+                            snackbarHostState.showSnackbar(context.getString(R.string.calendar_clear_success))
                         } catch (e: Exception) {
-                            snackbarHostState.showSnackbar("清空失败：${readableSyncError(e)}")
+                            snackbarHostState.showSnackbar(
+                                context.getString(R.string.calendar_clear_failed, readableSyncError(e))
+                            )
                         }
                     }
                 },
@@ -281,7 +298,7 @@ fun CalendarScreen(
                     .height(46.dp),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("清空已同步的日历课表")
+                Text(stringResource(R.string.calendar_clear_button))
             }
 
             // 底部留白，配合 verticalScroll 保证小屏也能完整看到最后一个按钮

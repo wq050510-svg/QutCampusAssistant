@@ -20,9 +20,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cn.edu.qut.campus.R
 
 /**
  * 全局统一的加载 / 错误 / 空状态组件。
@@ -61,8 +63,10 @@ fun ErrorState(
     message: String,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
-    retryLabel: String = "重试"
+    retryLabel: String? = null
 ) {
+    // 兼容既有调用方：调用方不传 retryLabel 时回落到通用「重试」文案
+    val label = retryLabel ?: stringResource(R.string.state_retry)
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -78,7 +82,7 @@ fun ErrorState(
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "数据获取失败",
+                text = stringResource(R.string.state_fetch_failed),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -90,7 +94,7 @@ fun ErrorState(
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = onRetry) { Text(retryLabel) }
+            Button(onClick = onRetry) { Text(label) }
         }
     }
 }
