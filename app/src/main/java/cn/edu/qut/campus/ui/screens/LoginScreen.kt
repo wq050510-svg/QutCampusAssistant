@@ -37,6 +37,7 @@ fun LoginScreen(
     var passwordVisible by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var showSsoDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
@@ -170,12 +171,59 @@ fun LoginScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // 统一身份认证入口按钮
+            OutlinedButton(
+                onClick = {
+                    errorMessage = null
+                    showSsoDialog = true
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                enabled = !isLoading
+            ) {
+                Icon(
+                    imageVector = Icons.Default.School,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "统一身份认证登录 (微信/短信/密码)",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "密码仅在本地安全加密，直连青理正方 V9 系统",
+                text = "支持教务账密直接登录或统一认证微信扫码安全授权",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            )
+        }
+
+        // 统一身份认证安全弹窗 (方案A)
+        if (showSsoDialog) {
+            SsoLoginDialog(
+                onDismiss = { showSsoDialog = false },
+                onCookiesCaptured = { cookies ->
+                    scope.launch {
+                        isLoading = true
+                        val result = repository.loginWithCookiesAndSyncAll(cookies)
+                        isLoading = false
+                        showSsoDialog = false
+                        if (result.isSuccess) {
+                            onLoginSuccess()
+                        } else {
+                            errorMessage = result.exceptionOrNull()?.message ?: "统一认证数据同步异常，请重试"
+                        }
+                    }
+                }
             )
         }
     }

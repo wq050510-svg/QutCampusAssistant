@@ -523,11 +523,101 @@ class ZhengFangClient {
             Result.failure(e)
         }
     }
+
+    // 注入外部抓取的 Cookie (如统一身份认证 SSO 授权捕获的凭证)
+    fun injectCookies(rawCookieHeader: String) {
+        val pairs = rawCookieHeader.split(";")
+        val cookieList = mutableListOf<Cookie>()
+        for (pair in pairs) {
+            val trimmed = pair.trim()
+            if (trimmed.isEmpty() || !trimmed.contains("=")) continue
+            val name = trimmed.substringBefore("=").trim()
+            val value = trimmed.substringAfter("=").trim()
+            try {
+                val c = Cookie.Builder()
+                    .name(name)
+                    .value(value)
+                    .domain("jxgl.qut.edu.cn")
+                    .path("/")
+                    .build()
+                cookieList.add(c)
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+        cookieJar.addCookies(cookieList)
+    }
+
+    // 通过 Cookie 初始化会话并返回用户信息
+    suspend fun initWithCookies(rawCookieHeader: String): Result<User> = withContext(Dispatchers.IO) {
+        try {
+            injectCookies(rawCookieHeader)
+
+            // 1. 请求教务主页以激活并验证该 Cookie
+            val homeReq = Request.Builder()
+                .url("$BASE_URL/xtgl/index_initMenu.html")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+                .build()
+            val homeRes = client.newCall(homeReq).execute()
+            val homeHtml = homeRes.body?.string().orEmpty()
+
+            var name = "青理同学"
+            var studentId = ""
+
+            val xmMatcher = Pattern.compile("id=\"user-name\"[^>]*>([^<]+)<").matcher(homeHtml)
+            if (xmMatcher.find()) {
+                name = xmMatcher.group(1)?.trim()?.takeIf { it.isNotEmpty() } ?: "青理同学"
+            }
+            val yhmMatcher = Pattern.compile("id=\"user-id\"[^>]*>([^<]+)<").matcher(homeHtml)
+            if (yhmMatcher.find()) {
+                studentId = yhmMatcher.group(1)?.trim().orEmpty()
+            }
+            if (studentId.isEmpty()) {
+                val keyMatcher = Pattern.compile("id=\"sessionUserKey\"[^>]*value=\"([^\"]+)\"").matcher(homeHtml)
+                if (keyMatcher.find()) {
+                    studentId = keyMatcher.group(1)?.trim().orEmpty()
+                }
+            }
+
+            // 2. 验证课表抓取连通性
+            val scheduleResult = fetchSchedule("2026", "3")
+            if (scheduleResult.isFailure) {
+                val defaultSchedule = fetchSchedule()
+                if (defaultSchedule.isFailure && !homeHtml.contains("xtgl") && !homeHtml.contains("教学一体化") && !homeHtml.contains("jwglxt")) {
+                    return@withContext Result.failure(Exception("教务会话未成功建立，请在统一认证页面重试"))
+                }
+            }
+
+            val user = User(
+                studentId = studentId.ifEmpty { "统一认证学子" },
+                name = name,
+                className = "",
+                major = "",
+                grade = "",
+                campus = "黄岛校区"
+            )
+
+            Result.success(user)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }
 
 // 内存 CookieJar 管理 Session
 private class SimpleCookieJar : CookieJar {
     private val cookieStore = mutableListOf<Cookie>()
+
+    fun addCookies(cookies: List<Cookie>) {
+        for (c in cookies) {
+            cookieStore.removeAll { it.name == c.name && it.domain == c.domain }
+            cookieStore.add(c)
+        }
+    }
+
+    fun clear() {
+        cookieStore.clear()
+    }
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         cookieStore.removeAll { old -> cookies.any { new -> new.name == old.name } }

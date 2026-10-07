@@ -60,6 +60,10 @@ class AppPreferences(context: Context) {
         get() = prefs.getBoolean("key_is_logged_in", false)
         set(value) = prefs.edit().putBoolean("key_is_logged_in", value).apply()
 
+    var cookies: String
+        get() = prefs.getString("key_cookies", "") ?: ""
+        set(value) = prefs.edit().putString("key_cookies", value).apply()
+
     fun clear() {
         prefs.edit().clear().apply()
     }

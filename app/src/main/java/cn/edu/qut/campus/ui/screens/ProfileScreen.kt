@@ -54,7 +54,7 @@ fun ProfileScreen(
             val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             "v${pInfo.versionName} 正式版"
         } catch (e: Exception) {
-            "v1.1.0 正式版"
+            "v1.2.0 正式版"
         }
     }
 

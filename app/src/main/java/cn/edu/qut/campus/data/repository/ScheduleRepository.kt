@@ -27,6 +27,12 @@ class ScheduleRepository(
     val prefs = app.preferences
     private val gson = Gson()
 
+    init {
+        if (prefs.cookies.isNotEmpty()) {
+            client.injectCookies(prefs.cookies)
+        }
+    }
+
     val coursesFlow: Flow<List<Course>> = db.courseDao().getAllCourses().map { list ->
         list.map { it.toModel() }
     }
@@ -61,9 +67,15 @@ class ScheduleRepository(
     suspend fun ensureLoggedIn(): Boolean {
         val uid = prefs.studentId
         val pwd = prefs.password
-        if (uid.isEmpty() || pwd.isEmpty()) return false
-        val res = client.login(uid, pwd)
-        return res.isSuccess
+        if (uid.isNotEmpty() && pwd.isNotEmpty()) {
+            val res = client.login(uid, pwd)
+            return res.isSuccess
+        }
+        if (prefs.cookies.isNotEmpty()) {
+            client.injectCookies(prefs.cookies)
+            return true
+        }
+        return false
     }
 
     suspend fun syncAcademicProgress(): Result<AcademicProgress> {
@@ -166,6 +178,37 @@ class ScheduleRepository(
         prefs.studentName = user.name
         prefs.studentClass = user.className
         prefs.studentMajor = user.major
+        prefs.isLoggedIn = true
+
+        // 刷新课表
+        syncSchedule()
+
+        // 刷新考试
+        syncExams()
+
+        // 刷新成绩
+        syncGrades()
+
+        // 刷新学业表现
+        syncAcademicProgress()
+
+        return Result.success(user)
+    }
+
+    suspend fun loginWithCookiesAndSyncAll(cookieHeader: String): Result<User> {
+        val initResult = client.initWithCookies(cookieHeader)
+        if (initResult.isFailure) {
+            return initResult
+        }
+
+        val user = initResult.getOrThrow()
+        prefs.cookies = cookieHeader
+        if (user.studentId.isNotEmpty() && user.studentId != "统一认证学子") {
+            prefs.studentId = user.studentId
+        }
+        if (user.name.isNotEmpty()) {
+            prefs.studentName = user.name
+        }
         prefs.isLoggedIn = true
 
         // 刷新课表
