@@ -27,12 +27,6 @@ class ScheduleRepository(
     val prefs = app.preferences
     private val gson = Gson()
 
-    init {
-        if (prefs.cookies.isNotEmpty()) {
-            client.injectCookies(prefs.cookies)
-        }
-    }
-
     val coursesFlow: Flow<List<Course>> = db.courseDao().getAllCourses().map { list ->
         list.map { it.toModel() }
     }
@@ -67,15 +61,13 @@ class ScheduleRepository(
     suspend fun ensureLoggedIn(): Boolean {
         val uid = prefs.studentId
         val pwd = prefs.password
-        if (uid.isNotEmpty() && pwd.isNotEmpty()) {
-            val res = client.login(uid, pwd)
-            return res.isSuccess
+        if (uid.isEmpty() || pwd.isEmpty()) return false
+        val res = if (prefs.loginType == "sso") {
+            client.loginViaSSO(uid, pwd)
+        } else {
+            client.login(uid, pwd)
         }
-        if (prefs.cookies.isNotEmpty()) {
-            client.injectCookies(prefs.cookies)
-            return true
-        }
-        return false
+        return res.isSuccess
     }
 
     suspend fun syncAcademicProgress(): Result<AcademicProgress> {
@@ -166,8 +158,12 @@ class ScheduleRepository(
         }
     }
 
-    suspend fun loginAndSyncAll(studentId: String, password: String): Result<User> {
-        val loginResult = client.login(studentId, password)
+    suspend fun loginAndSyncAll(studentId: String, password: String, isSso: Boolean = true): Result<User> {
+        val loginResult = if (isSso) {
+            client.loginViaSSO(studentId, password)
+        } else {
+            client.login(studentId, password)
+        }
         if (loginResult.isFailure) {
             return loginResult
         }
@@ -175,40 +171,10 @@ class ScheduleRepository(
         val user = loginResult.getOrThrow()
         prefs.studentId = user.studentId
         prefs.password = password
+        prefs.loginType = if (isSso) "sso" else "zf"
         prefs.studentName = user.name
         prefs.studentClass = user.className
         prefs.studentMajor = user.major
-        prefs.isLoggedIn = true
-
-        // 刷新课表
-        syncSchedule()
-
-        // 刷新考试
-        syncExams()
-
-        // 刷新成绩
-        syncGrades()
-
-        // 刷新学业表现
-        syncAcademicProgress()
-
-        return Result.success(user)
-    }
-
-    suspend fun loginWithCookiesAndSyncAll(cookieHeader: String): Result<User> {
-        val initResult = client.initWithCookies(cookieHeader)
-        if (initResult.isFailure) {
-            return initResult
-        }
-
-        val user = initResult.getOrThrow()
-        prefs.cookies = cookieHeader
-        if (user.studentId.isNotEmpty() && user.studentId != "统一认证学子") {
-            prefs.studentId = user.studentId
-        }
-        if (user.name.isNotEmpty()) {
-            prefs.studentName = user.name
-        }
         prefs.isLoggedIn = true
 
         // 刷新课表

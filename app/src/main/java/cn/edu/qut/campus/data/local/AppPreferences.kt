@@ -60,9 +60,9 @@ class AppPreferences(context: Context) {
         get() = prefs.getBoolean("key_is_logged_in", false)
         set(value) = prefs.edit().putBoolean("key_is_logged_in", value).apply()
 
-    var cookies: String
-        get() = prefs.getString("key_cookies", "") ?: ""
-        set(value) = prefs.edit().putString("key_cookies", value).apply()
+    var loginType: String // "zf" (教务处直连) 或 "sso" (统一身份认证)
+        get() = prefs.getString("key_login_type", "sso") ?: "sso"
+        set(value) = prefs.edit().putString("key_login_type", value).apply()
 
     fun clear() {
         prefs.edit().clear().apply()

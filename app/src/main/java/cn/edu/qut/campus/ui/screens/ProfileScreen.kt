@@ -544,8 +544,9 @@ fun ProfileScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("教务系统接口", style = MaterialTheme.typography.bodyMedium)
-                        Text("青理正方系统直连", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        Text("认证接入方式", style = MaterialTheme.typography.bodyMedium)
+                        val authText = if (prefs.loginType == "sso") "统一身份认证 (SSO)" else "正方教务系统直连"
+                        Text(authText, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))

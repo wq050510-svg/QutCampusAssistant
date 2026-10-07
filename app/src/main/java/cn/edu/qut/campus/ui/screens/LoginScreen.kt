@@ -22,6 +22,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.edu.qut.campus.data.repository.ScheduleRepository
@@ -32,12 +34,12 @@ fun LoginScreen(
     repository: ScheduleRepository,
     onLoginSuccess: () -> Unit
 ) {
+    var isSsoLogin by remember { mutableStateOf(repository.prefs.loginType != "zf") }
     var studentId by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var showSsoDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
@@ -84,16 +86,67 @@ fun LoginScreen(
                 modifier = Modifier.padding(top = 4.dp)
             )
 
-            Spacer(modifier = Modifier.height(36.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // 学号输入框
+            // 登录方式切换 (统一身份认证 vs 教务系统直连)
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                TabRow(
+                    selectedTabIndex = if (isSsoLogin) 0 else 1,
+                    containerColor = Color.Transparent,
+                    divider = {}
+                ) {
+                    Tab(
+                        selected = isSsoLogin,
+                        onClick = {
+                            isSsoLogin = true
+                            errorMessage = null
+                        },
+                        text = {
+                            Text(
+                                "统一身份认证",
+                                fontWeight = if (isSsoLogin) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    )
+                    Tab(
+                        selected = !isSsoLogin,
+                        onClick = {
+                            isSsoLogin = false
+                            errorMessage = null
+                        },
+                        text = {
+                            Text(
+                                "教务直接登录",
+                                fontWeight = if (!isSsoLogin) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = if (isSsoLogin) "青理统一身份认证 (sso.qut.edu.cn)" else "青理正方教务系统 (jxgl.qut.edu.cn)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // 账号/学号输入框
             OutlinedTextField(
                 value = studentId,
                 onValueChange = { studentId = it },
-                label = { Text("教务学号") },
+                label = { Text(if (isSsoLogin) "统一认证账号 (学号/工号)" else "教务学号") },
                 leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Next),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             )
@@ -104,7 +157,7 @@ fun LoginScreen(
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("教务处密码") },
+                label = { Text(if (isSsoLogin) "统一认证密码" else "教务处密码") },
                 leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                 trailingIcon = {
                     IconButton(onClick = { passwordVisible = !passwordVisible }) {
@@ -137,13 +190,13 @@ fun LoginScreen(
             Button(
                 onClick = {
                     if (studentId.isBlank() || password.isBlank()) {
-                        errorMessage = "请输入学号与密码"
+                        errorMessage = "请输入账号与密码"
                         return@Button
                     }
                     isLoading = true
                     errorMessage = null
                     scope.launch {
-                        val result = repository.loginAndSyncAll(studentId, password)
+                        val result = repository.loginAndSyncAll(studentId, password, isSso = isSsoLogin)
                         isLoading = false
                         if (result.isSuccess) {
                             onLoginSuccess()
@@ -171,59 +224,13 @@ fun LoginScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // 统一身份认证入口按钮
-            OutlinedButton(
-                onClick = {
-                    errorMessage = null
-                    showSsoDialog = true
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-                shape = RoundedCornerShape(14.dp),
-                enabled = !isLoading
-            ) {
-                Icon(
-                    imageVector = Icons.Default.School,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "统一身份认证登录 (微信/短信/密码)",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "支持教务账密直接登录或统一认证微信扫码安全授权",
+                text = if (isSsoLogin) "账号密码仅在本地处理，直连青理统一身份认证系统" else "密码仅在本地安全加密，直连青理正方 V9 系统",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-            )
-        }
-
-        // 统一身份认证安全弹窗 (方案A)
-        if (showSsoDialog) {
-            SsoLoginDialog(
-                onDismiss = { showSsoDialog = false },
-                onCookiesCaptured = { cookies ->
-                    scope.launch {
-                        isLoading = true
-                        val result = repository.loginWithCookiesAndSyncAll(cookies)
-                        isLoading = false
-                        showSsoDialog = false
-                        if (result.isSuccess) {
-                            onLoginSuccess()
-                        } else {
-                            errorMessage = result.exceptionOrNull()?.message ?: "统一认证数据同步异常，请重试"
-                        }
-                    }
-                }
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center
             )
         }
     }

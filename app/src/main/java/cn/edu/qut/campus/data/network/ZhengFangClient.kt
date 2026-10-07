@@ -17,6 +17,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.spec.RSAPublicKeySpec
+import java.security.spec.X509EncodedKeySpec
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 import javax.crypto.Cipher
@@ -140,6 +141,145 @@ class ZhengFangClient {
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    // 统一身份认证直连登录 (sso.qut.edu.cn)
+    suspend fun loginViaSSO(username: String, password: String): Result<User> = withContext(Dispatchers.IO) {
+        try {
+            // 1. 请求教务系统的统一身份认证入口
+            val entryUrl = "https://jxgl.qut.edu.cn/sso/ktiotlogin"
+            var currentReq = Request.Builder()
+                .url(entryUrl)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+                .build()
+            var currentRes = client.newCall(currentReq).execute()
+
+            // 跟踪重定向直到到达 SSO 登录表单页 (200 OK)
+            var redirectCount = 0
+            while (currentRes.isRedirect && redirectCount < 8) {
+                val loc = currentRes.header("Location") ?: break
+                val nextUrl = currentRes.request.url.resolve(loc) ?: break
+                currentRes.close()
+                currentReq = Request.Builder()
+                    .url(nextUrl)
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+                    .header("Referer", currentReq.url.toString())
+                    .get()
+                    .build()
+                currentRes = client.newCall(currentReq).execute()
+                redirectCount++
+            }
+
+            val loginPageHtml = currentRes.body?.string().orEmpty()
+            val loginPageUrl = currentRes.request.url
+
+            // 2. 从表单页面中提取 pid 和 publicKey
+            val pidMatcher = Pattern.compile("name=[\"']?pid[\"']?[^>]*value=[\"']?([^\"'\\s>]+)[\"']?|value=[\"']?([^\"'\\s>]+)[\"']?[^>]*name=[\"']?pid[\"']?", Pattern.CASE_INSENSITIVE).matcher(loginPageHtml)
+            val pid = if (pidMatcher.find()) {
+                val g1 = pidMatcher.group(1)
+                if (!g1.isNullOrEmpty()) g1 else pidMatcher.group(2).orEmpty()
+            } else ""
+
+            val keyMatcher = Pattern.compile("name=[\"']?publicKey[\"']?[^>]*value=[\"']?([^\"'\\s>]*)[\"']?|value=[\"']?([^\"'\\s>]*)[\"']?[^>]*name=[\"']?publicKey[\"']?", Pattern.CASE_INSENSITIVE).matcher(loginPageHtml)
+            val publicKey = if (keyMatcher.find()) {
+                val g1 = keyMatcher.group(1)
+                if (!g1.isNullOrEmpty()) g1 else keyMatcher.group(2).orEmpty()
+            } else ""
+
+            // 3. 密码加密（如果启用了 publicKey 则 RSA 加密，否则提交明文）
+            val finalPassword = if (publicKey.isNotBlank()) {
+                encryptSsoPassword(password, publicKey)
+            } else {
+                password
+            }
+
+            // 4. POST 提交统一身份认证表单
+            val formBody = FormBody.Builder()
+                .add("username", username.trim())
+                .add("password", finalPassword)
+                .add("pid", pid)
+                .build()
+
+            val postReq = Request.Builder()
+                .url(loginPageUrl)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+                .header("Referer", loginPageUrl.toString())
+                .post(formBody)
+                .build()
+
+            var postRes = client.newCall(postReq).execute()
+
+            // 如果返回 200，说明仍在登录页面（通常提示密码错误或验证码）
+            if (postRes.code == 200) {
+                val errHtml = postRes.body?.string().orEmpty()
+                val errMatcher = Pattern.compile("id=[\"']?errormes[\"']?[^>]*value=[\"']?([^\"'>]*)[\"']?", Pattern.CASE_INSENSITIVE).matcher(errHtml)
+                val errMsg = if (errMatcher.find()) errMatcher.group(1)?.trim().orEmpty() else ""
+                val errFinal = if (errMsg.isNotBlank()) errMsg else "统一身份认证失败，请检查账号密码"
+                return@withContext Result.failure(Exception(errFinal))
+            }
+
+            // 登录成功时会返回 302/303 重定向回教务系统
+            if (postRes.isRedirect) {
+                var loginRedirectCount = 0
+                var currFollowReq = postReq
+                while (postRes.isRedirect && loginRedirectCount < 10) {
+                    val loc = postRes.header("Location") ?: break
+                    val nextUrl = postRes.request.url.resolve(loc) ?: break
+                    postRes.close()
+                    currFollowReq = Request.Builder()
+                        .url(nextUrl)
+                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+                        .header("Referer", currFollowReq.url.toString())
+                        .get()
+                        .build()
+                    postRes = client.newCall(currFollowReq).execute()
+                    loginRedirectCount++
+                }
+                postRes.close()
+
+                // 访问教务系统主页以初始化 Session
+                val homeReq = Request.Builder()
+                    .url("$BASE_URL/xtgl/index_initMenu.html")
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+                    .build()
+                client.newCall(homeReq).execute().close()
+
+                val user = User(
+                    studentId = username,
+                    name = "青理同学",
+                    className = "",
+                    major = "",
+                    grade = "",
+                    campus = "黄岛校区"
+                )
+                Result.success(user)
+            } else {
+                Result.failure(Exception("登录响应异常(HTTP ${postRes.code})"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun encryptSsoPassword(password: String, pubKeyPem: String): String {
+        return try {
+            val cleanKey = pubKeyPem
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replace("-----BEGIN RSA PUBLIC KEY-----", "")
+                .replace("-----END RSA PUBLIC KEY-----", "")
+                .replace("\\s+".toRegex(), "")
+            val keyBytes = Base64.decode(cleanKey, Base64.DEFAULT)
+            val spec = X509EncodedKeySpec(keyBytes)
+            val keyFactory = KeyFactory.getInstance("RSA")
+            val pubKey = keyFactory.generatePublic(spec)
+            val cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding")
+            cipher.init(Cipher.ENCRYPT_MODE, pubKey)
+            val encrypted = cipher.doFinal(password.toByteArray(Charsets.UTF_8))
+            Base64.encodeToString(encrypted, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            password
         }
     }
 
@@ -523,104 +663,16 @@ class ZhengFangClient {
             Result.failure(e)
         }
     }
-
-    // 注入外部抓取的 Cookie (如统一身份认证 SSO 授权捕获的凭证)
-    fun injectCookies(rawCookieHeader: String) {
-        val pairs = rawCookieHeader.split(";")
-        val cookieList = mutableListOf<Cookie>()
-        for (pair in pairs) {
-            val trimmed = pair.trim()
-            if (trimmed.isEmpty() || !trimmed.contains("=")) continue
-            val name = trimmed.substringBefore("=").trim()
-            val value = trimmed.substringAfter("=").trim()
-            try {
-                val c = Cookie.Builder()
-                    .name(name)
-                    .value(value)
-                    .domain("jxgl.qut.edu.cn")
-                    .path("/")
-                    .build()
-                cookieList.add(c)
-            } catch (e: Exception) {
-                // ignore
-            }
-        }
-        cookieJar.addCookies(cookieList)
-    }
-
-    // 通过 Cookie 初始化会话并返回用户信息
-    suspend fun initWithCookies(rawCookieHeader: String): Result<User> = withContext(Dispatchers.IO) {
-        try {
-            injectCookies(rawCookieHeader)
-
-            // 1. 请求教务主页以激活并验证该 Cookie
-            val homeReq = Request.Builder()
-                .url("$BASE_URL/xtgl/index_initMenu.html")
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
-                .build()
-            val homeRes = client.newCall(homeReq).execute()
-            val homeHtml = homeRes.body?.string().orEmpty()
-
-            var name = "青理同学"
-            var studentId = ""
-
-            val xmMatcher = Pattern.compile("id=\"user-name\"[^>]*>([^<]+)<").matcher(homeHtml)
-            if (xmMatcher.find()) {
-                name = xmMatcher.group(1)?.trim()?.takeIf { it.isNotEmpty() } ?: "青理同学"
-            }
-            val yhmMatcher = Pattern.compile("id=\"user-id\"[^>]*>([^<]+)<").matcher(homeHtml)
-            if (yhmMatcher.find()) {
-                studentId = yhmMatcher.group(1)?.trim().orEmpty()
-            }
-            if (studentId.isEmpty()) {
-                val keyMatcher = Pattern.compile("id=\"sessionUserKey\"[^>]*value=\"([^\"]+)\"").matcher(homeHtml)
-                if (keyMatcher.find()) {
-                    studentId = keyMatcher.group(1)?.trim().orEmpty()
-                }
-            }
-
-            // 2. 验证课表抓取连通性
-            val scheduleResult = fetchSchedule("2026", "3")
-            if (scheduleResult.isFailure) {
-                val defaultSchedule = fetchSchedule()
-                if (defaultSchedule.isFailure && !homeHtml.contains("xtgl") && !homeHtml.contains("教学一体化") && !homeHtml.contains("jwglxt")) {
-                    return@withContext Result.failure(Exception("教务会话未成功建立，请在统一认证页面重试"))
-                }
-            }
-
-            val user = User(
-                studentId = studentId.ifEmpty { "统一认证学子" },
-                name = name,
-                className = "",
-                major = "",
-                grade = "",
-                campus = "黄岛校区"
-            )
-
-            Result.success(user)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
 }
 
 // 内存 CookieJar 管理 Session
 private class SimpleCookieJar : CookieJar {
     private val cookieStore = mutableListOf<Cookie>()
 
-    fun addCookies(cookies: List<Cookie>) {
-        for (c in cookies) {
-            cookieStore.removeAll { it.name == c.name && it.domain == c.domain }
-            cookieStore.add(c)
-        }
-    }
-
-    fun clear() {
-        cookieStore.clear()
-    }
-
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-        cookieStore.removeAll { old -> cookies.any { new -> new.name == old.name } }
+        cookieStore.removeAll { old -> 
+            cookies.any { new -> new.name == old.name && new.domain == old.domain && new.path == old.path } 
+        }
         cookieStore.addAll(cookies)
     }
 
