@@ -27,21 +27,74 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.edu.qut.campus.data.repository.ScheduleRepository
+import cn.edu.qut.campus.ui.components.readableSyncError
 import kotlinx.coroutines.launch
+
+/** 学号 / 工号的最短合理长度，用于登录前的本地粗校验 */
+private const val MIN_ACCOUNT_LENGTH = 6
 
 @Composable
 fun LoginScreen(
     repository: ScheduleRepository,
     onLoginSuccess: () -> Unit
 ) {
+    // 登录方式持久化：切换 Tab 立即写回 prefs，冷启动不再回到默认方式
     var isSsoLogin by remember { mutableStateOf(repository.prefs.loginType != "zf") }
-    var studentId by remember { mutableStateOf("") }
+    // 记住账号：仅预填学号，密码始终由用户重新输入
+    var studentId by remember { mutableStateOf(repository.prefs.studentId) }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    // 字段级错误：仅在用户提交过一次后展示，避免边输边报错
+    var studentIdError by remember { mutableStateOf<String?>(null) }
+    var passwordError by remember { mutableStateOf<String?>(null) }
+    var showPrivacyDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+
+    // 登录逻辑抽成闭包，供「登录按钮」与密码框 ImeAction.Done 共用
+    val performLogin: () -> Unit = {
+        val account = studentId.trim()
+        val pwd = password
+
+        val accountError = when {
+            account.isEmpty() -> "请输入学号"
+            account.length < MIN_ACCOUNT_LENGTH -> "学号格式看起来不对，请检查"
+            else -> null
+        }
+        val pwdError = if (pwd.isEmpty()) "请输入密码" else null
+
+        studentIdError = accountError
+        passwordError = pwdError
+
+        if (accountError != null || pwdError != null) {
+            errorMessage = accountError ?: pwdError
+        } else if (!isLoading) {
+            focusManager.clearFocus()
+            isLoading = true
+            errorMessage = null
+            scope.launch {
+                // 用 runCatching 兜住取消/异常：CancellationException 会被重新抛出，
+                // 不会伪装成「登录失败」而误报给用户
+                val outcome = runCatching {
+                    repository.loginAndSyncAll(account, pwd, isSso = isSsoLogin)
+                }
+                isLoading = false
+                val result = outcome.getOrNull()
+                when {
+                    result == null -> errorMessage = readableSyncError(outcome.exceptionOrNull())
+                    result.isSuccess -> onLoginSuccess()
+                    else -> errorMessage = readableSyncError(result.exceptionOrNull())
+                }
+            }
+        }
+    }
+
+    // 密码显示切换的变换器只建一次，避免每次重组新建对象导致输入框整体重新布局
+    val passwordTransformation = remember(passwordVisible) {
+        if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation()
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -103,7 +156,9 @@ fun LoginScreen(
                         selected = isSsoLogin,
                         onClick = {
                             isSsoLogin = true
+                            repository.prefs.loginType = "sso"
                             errorMessage = null
+                            studentIdError = null
                         },
                         text = {
                             Text(
@@ -116,7 +171,9 @@ fun LoginScreen(
                         selected = !isSsoLogin,
                         onClick = {
                             isSsoLogin = false
+                            repository.prefs.loginType = "zf"
                             errorMessage = null
+                            studentIdError = null
                         },
                         text = {
                             Text(
@@ -142,11 +199,24 @@ fun LoginScreen(
             // 账号/学号输入框
             OutlinedTextField(
                 value = studentId,
-                onValueChange = { studentId = it },
+                onValueChange = {
+                    studentId = it
+                    studentIdError = null
+                    errorMessage = null
+                },
                 label = { Text(if (isSsoLogin) "统一认证账号 (学号/工号)" else "教务学号") },
                 leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Next),
+                isError = studentIdError != null,
+                supportingText = studentIdError?.let { message ->
+                    { Text(message) }
+                },
+                keyboardOptions = KeyboardOptions(
+                    // 教务学号一定是数字，用数字键盘更快；
+                    // 统一身份认证账号可能是字母工号，用全键盘避免输不进去
+                    keyboardType = if (isSsoLogin) KeyboardType.Text else KeyboardType.Number,
+                    imeAction = ImeAction.Next
+                ),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             )
@@ -156,21 +226,30 @@ fun LoginScreen(
             // 密码输入框
             OutlinedTextField(
                 value = password,
-                onValueChange = { password = it },
+                onValueChange = {
+                    password = it
+                    passwordError = null
+                    errorMessage = null
+                },
                 label = { Text(if (isSsoLogin) "统一认证密码" else "教务处密码") },
                 leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                 trailingIcon = {
                     IconButton(onClick = { passwordVisible = !passwordVisible }) {
                         Icon(
                             imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                            contentDescription = null
+                            contentDescription = if (passwordVisible) "隐藏密码" else "显示密码"
                         )
                     }
                 },
                 singleLine = true,
-                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                isError = passwordError != null,
+                supportingText = passwordError?.let { message ->
+                    { Text(message) }
+                },
+                visualTransformation = passwordTransformation,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                // 键盘「完成」直接登录，与下方按钮走同一段逻辑
+                keyboardActions = KeyboardActions(onDone = { performLogin() }),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             )
@@ -180,7 +259,8 @@ fun LoginScreen(
                 Text(
                     text = errorMessage!!,
                     color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center
                 )
             }
 
@@ -188,23 +268,7 @@ fun LoginScreen(
 
             // 登录按钮
             Button(
-                onClick = {
-                    if (studentId.isBlank() || password.isBlank()) {
-                        errorMessage = "请输入账号与密码"
-                        return@Button
-                    }
-                    isLoading = true
-                    errorMessage = null
-                    scope.launch {
-                        val result = repository.loginAndSyncAll(studentId, password, isSso = isSsoLogin)
-                        isLoading = false
-                        if (result.isSuccess) {
-                            onLoginSuccess()
-                        } else {
-                            errorMessage = result.exceptionOrNull()?.message ?: "登录异常，请稍后重试"
-                        }
-                    }
-                },
+                onClick = performLogin,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
@@ -224,14 +288,51 @@ fun LoginScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = if (isSsoLogin) "账号密码仅在本地处理，直连青理统一身份认证系统" else "密码仅在本地安全加密，直连青理正方 V9 系统",
+                text = if (isSsoLogin) "账号密码仅在本地处理，直连青理统一身份认证系统" else "密码仅保存在本机，直连青理正方 V9 系统",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center
             )
+
+            TextButton(onClick = { showPrivacyDialog = true }) {
+                Text(
+                    text = "隐私与数据使用说明",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
+    }
+
+    if (showPrivacyDialog) {
+        val bodyStyle = MaterialTheme.typography.bodySmall
+        AlertDialog(
+            onDismissRequest = { showPrivacyDialog = false },
+            title = { Text("隐私与数据使用说明") },
+            text = {
+                Column {
+                    Text(
+                        text = "① 你输入的学号与密码，仅用于直连青岛理工大学教务系统与统一身份认证系统，" +
+                            "不会上传到任何第三方服务器。",
+                        style = bodyStyle
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "② 密码在本机经系统级密钥加密保存，仅用于自动重新登录；退出登录时会一并清除。",
+                        style = bodyStyle
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "③ 本应用非学校官方应用，数据以教务系统为准，仅供个人查询课表、成绩与考试使用。",
+                        style = bodyStyle
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPrivacyDialog = false }) { Text("我知道了") }
+            }
+        )
     }
 }

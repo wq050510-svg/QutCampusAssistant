@@ -1,8 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.QutCampusAssistant" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- 显式指定窗口底色（与 Compose 浅色 background 一致），避免冷启动首帧闪白/闪灰 -->
+        <item name="android:windowBackground">@color/surface</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <!--
+      应用内手动选择「深色模式」而系统仍是浅色时使用：
+      values-night 只在系统深色下生效，XML 读不到应用内偏好，
+      因此由 MainActivity 在 onCreate 里按偏好 setTheme 到这一份，消除启动首帧闪白。
+    -->
+    <style name="Theme.QutCampusAssistant.Dark" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

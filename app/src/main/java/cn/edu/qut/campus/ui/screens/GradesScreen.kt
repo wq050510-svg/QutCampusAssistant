@@ -10,11 +10,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -22,30 +21,89 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.edu.qut.campus.data.model.Grade
 import cn.edu.qut.campus.data.repository.ScheduleRepository
-import kotlinx.coroutines.delay
+import cn.edu.qut.campus.ui.components.EmptyState
+import cn.edu.qut.campus.ui.components.ErrorState
+import cn.edu.qut.campus.ui.components.LoadingState
+import cn.edu.qut.campus.ui.components.readableSyncError
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+
+/**
+ * 自动同步节流窗口：距上次成功同步未超过该时长且本地已有缓存时，
+ * 切回成绩 Tab 不再重复请求教务系统（避免每次切 Tab 都白等一次网络往返）。
+ */
+private const val AUTO_SYNC_THROTTLE_MS = 30 * 60 * 1000L
+
+/**
+ * 把 Grade 和只算一次的通过判定绑定在一起。
+ * Grade.isPassed 是每次访问都会重建失败关键字列表的 getter，
+ * 列表页 / 统计 / 卡片在一帧内会读多次，这里先算好避免同一帧重复计算。
+ */
+private data class GradedGrade(val grade: Grade, val passed: Boolean)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GradesScreen(repository: ScheduleRepository) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val grades by repository.gradesFlow.collectAsState(initial = emptyList())
+    val grades by repository.gradesFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     var isRefreshing by remember { mutableStateOf(false) }
 
-    // 首次进入：若本地无数据则安全拉取一次
+    // 三态互斥：syncing(加载中) / syncError(失败) / syncSucceeded+空列表(确实没有数据)
+    var syncError by remember { mutableStateOf<String?>(null) }
+    var syncSucceeded by remember { mutableStateOf(false) }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // 本次进入页面是否已经自动同步过（rememberSaveable：旋转/重建后不重复打扰教务系统）
+    var autoSyncDone by rememberSaveable { mutableStateOf(false) }
+    // 本次进入是否真的发起了同步（节流命中时为 false，此时不能一直显示加载中）
+    var syncTriggered by remember { mutableStateOf(false) }
+
+    // 同步中（含本次进入还没跑过自动同步的首帧，避免先闪一帧空状态）
+    fun syncInProgress(): Boolean = isRefreshing || (syncTriggered && !syncSucceeded && syncError == null)
+
+    suspend fun doSync(showSuccessToast: Boolean) {
+        if (syncInProgress()) return
+        isRefreshing = true
+        try {
+            val res = repository.syncGrades()
+            val err = res.exceptionOrNull()
+            if (res.isSuccess) {
+                syncError = null
+                syncSucceeded = true
+                repository.prefs.lastSyncAt = System.currentTimeMillis()
+                if (showSuccessToast) {
+                    Toast.makeText(context, "成绩同步成功", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                syncError = readableSyncError(err)
+                snackbarHostState.showSnackbar(syncError ?: "成绩同步失败")
+            }
+        } catch (e: CancellationException) {
+            // 协程取消不是「同步失败」，必须原样抛出，否则会把页面销毁误报成网络错误
+            throw e
+        } catch (e: Exception) {
+            syncError = readableSyncError(e)
+            snackbarHostState.showSnackbar(syncError ?: "成绩同步失败")
+        } finally {
+            isRefreshing = false
+        }
+    }
+
+    // 自动同步策略：本次进入只自动同步一次（rememberSaveable），
+    // 且距上次成功同步未超过节流窗口且本地已有数据时不再重复打教务系统。
     LaunchedEffect(Unit) {
-        delay(400)
-        if (grades.isEmpty()) {
-            try {
-                isRefreshing = true
-                repository.syncGrades()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            } finally {
-                isRefreshing = false
+        if (!autoSyncDone) {
+            autoSyncDone = true
+            val localEmpty = grades.isEmpty()
+            val stale = System.currentTimeMillis() - repository.prefs.lastSyncAt > AUTO_SYNC_THROTTLE_MS
+            if (localEmpty || stale) {
+                syncTriggered = true
+                doSync(showSuccessToast = false)
             }
         }
     }
@@ -59,27 +117,35 @@ fun GradesScreen(repository: ScheduleRepository) {
         if (isDeduplicated) Grade.deduplicateGrades(grades) else grades
     }
 
+    // Grade.isPassed 每次访问都会重建 failKeywords 列表，这里每门课只判定一次并复用
+    val gradedRows = remember(baseGrades) {
+        baseGrades.map { grade -> GradedGrade(grade, grade.isPassed) }
+    }
+
     val semesters = remember(baseGrades) {
         listOf("全部学期") + baseGrades.map { "${it.academicYear}-${it.semester}" }.distinct().sortedDescending()
     }
 
     // 按学期过滤
-    val filteredGrades = remember(baseGrades, selectedSemester) {
-        if (selectedSemester == "全部学期") baseGrades
-        else baseGrades.filter { "${it.academicYear}-${it.semester}" == selectedSemester }
+    val filteredRows = remember(gradedRows, selectedSemester) {
+        if (selectedSemester == "全部学期") gradedRows
+        else gradedRows.filter { "${it.grade.academicYear}-${it.grade.semester}" == selectedSemester }
     }
 
-    // 统计指标计算（基于去重后的真实清单）
-    val totalCredits = remember(filteredGrades) {
+    val filteredGrades = remember(filteredRows) { filteredRows.map { it.grade } }
+
+    // 统计指标计算（基于去重后的真实清单，复用已算好的 isPassed）
+    val totalCredits = remember(filteredRows) {
         // 已获学分仅统计通过的课程
-        filteredGrades.filter { it.isPassed }.sumOf { it.credit }
+        filteredRows.filter { it.passed }.sumOf { it.grade.credit }
     }
 
-    val failedCount = remember(filteredGrades) {
-        filteredGrades.count { !it.isPassed && it.credit > 0 }
+    val failedCount = remember(filteredRows) {
+        filteredRows.count { !it.passed && it.grade.credit > 0 }
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -96,19 +162,7 @@ fun GradesScreen(repository: ScheduleRepository) {
                     IconButton(
                         onClick = {
                             coroutineScope.launch {
-                                try {
-                                    isRefreshing = true
-                                    val res = repository.syncGrades()
-                                    if (res.isSuccess) {
-                                        Toast.makeText(context, "成绩刷新成功", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, "刷新失败: ${res.exceptionOrNull()?.localizedMessage}", Toast.LENGTH_SHORT).show()
-                                    }
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "刷新失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
-                                } finally {
-                                    isRefreshing = false
-                                }
+                                doSync(showSuccessToast = true)
                             }
                         },
                         enabled = !isRefreshing
@@ -224,59 +278,27 @@ fun GradesScreen(repository: ScheduleRepository) {
                 )
             }
 
-            // 成绩内容区域
-            if (isRefreshing && filteredGrades.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator()
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Text(
-                            text = "正在直连正方教务系统同步历年成绩...",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 14.sp
-                        )
+            // 成绩内容区域：加载中 / 同步失败 / 确实无数据 三态严格区分，不共用同一张空状态卡
+            val loading = filteredGrades.isEmpty() && syncInProgress()
+            val failed = syncError != null && filteredGrades.isEmpty()
+            if (loading && !failed) {
+                LoadingState(message = "正在直连正方教务系统同步历年成绩...")
+            } else if (failed) {
+                ErrorState(
+                    message = syncError ?: "成绩同步失败，请稍后重试",
+                    onRetry = {
+                        coroutineScope.launch { doSync(showSuccessToast = true) }
                     }
-                }
+                )
             } else if (filteredGrades.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("暂无成绩记录", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(
-                            onClick = {
-                                coroutineScope.launch {
-                                    try {
-                                        isRefreshing = true
-                                        val res = repository.syncGrades()
-                                        if (res.isSuccess) {
-                                            Toast.makeText(context, "成绩同步成功", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "同步失败: ${res.exceptionOrNull()?.localizedMessage}", Toast.LENGTH_SHORT).show()
-                                        }
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "同步失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
-                                    } finally {
-                                        isRefreshing = false
-                                    }
-                                }
-                            }
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("点击立即同步教务处成绩")
-                        }
+                EmptyState(
+                    title = "暂无成绩记录",
+                    description = "教务系统本次返回的成绩为空，可点击下方按钮重新同步历年成绩",
+                    actionLabel = "点击立即同步教务处成绩",
+                    onAction = {
+                        coroutineScope.launch { doSync(showSuccessToast = true) }
                     }
-                }
+                )
             } else {
                 // 成绩明细列表
                 LazyColumn(
@@ -286,8 +308,8 @@ fun GradesScreen(repository: ScheduleRepository) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                    items(filteredGrades) { grade ->
-                        GradeItemCard(grade = grade)
+                    items(filteredRows, key = { it.grade.id }) { row ->
+                        GradeItemCard(grade = row.grade, passed = row.passed)
                     }
                 }
             }
@@ -296,7 +318,7 @@ fun GradesScreen(repository: ScheduleRepository) {
 }
 
 @Composable
-fun GradeItemCard(grade: Grade) {
+fun GradeItemCard(grade: Grade, passed: Boolean) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -336,7 +358,7 @@ fun GradeItemCard(grade: Grade) {
                     }
 
                     // 重修通过特殊徽章
-                    if (grade.isPassed && grade.examNature != "正常考试") {
+                    if (passed && grade.examNature != "正常考试") {
                         Spacer(modifier = Modifier.width(4.dp))
                         Surface(
                             shape = RoundedCornerShape(4.dp),
@@ -366,12 +388,12 @@ fun GradeItemCard(grade: Grade) {
                     text = grade.score,
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (grade.isPassed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    color = if (passed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                 )
                 Text(
-                    text = if (grade.isPassed) "已获 ${grade.credit} 学分" else "未获学分",
+                    text = if (passed) "已获 ${grade.credit} 学分" else "未获学分",
                     fontSize = 11.sp,
-                    color = if (grade.isPassed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+                    color = if (passed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
                 )
             }
         }

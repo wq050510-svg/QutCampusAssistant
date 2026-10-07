@@ -22,3 +22,9 @@ gen/
 out/
 release/
 *.log
+
+# 签名与凭据：绝不入库
+keystore.properties
+*.jks
+*.keystore
+*.p12

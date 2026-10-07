@@ -7,5 +7,6 @@
     <color name="on_surface">#191C1E</color>
     <color name="dark_background">#121212</color>
     <color name="dark_surface">#1E1E1E</color>
-    <color name="widget_text_shadow">#80000000</color>
+    <!-- 小组件白字阴影：桌面壁纸可能是浅色，阴影必须更实才可读（原 #80000000 太淡） -->
+    <color name="widget_text_shadow">#B3000000</color>
 </resources>

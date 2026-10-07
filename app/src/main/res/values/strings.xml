@@ -7,4 +7,10 @@
     <string name="campus_huangdao">黄岛校区</string>
     <string name="campus_shibei">市北校区</string>
     <string name="campus_linyi">临沂校区</string>
+
+    <!-- 桌面小组件新增文案（原有条目顺序与内容保持不变） -->
+    <string name="widget_no_courses_yesterday">昨天没有课哦</string>
+    <string name="widget_no_courses_tomorrow">明天没有课哦</string>
+    <string name="widget_more_courses">还有 %1$d 门课</string>
+    <string name="widget_load_failed">课表读取失败，点击刷新</string>
 </resources>

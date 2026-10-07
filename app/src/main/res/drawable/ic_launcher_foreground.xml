@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  启动图标前景：108x108dp 画布，图形全部落在中心 66dp 圆形安全区内
+  （任何自适应图标遮罩——圆形/方形/圆角方形/水滴——都不会裁到内容）。
+  造型：一页「课表」——白色圆角卡片 + 浅蓝标题条（带两个装订孔）+ 三条课程行。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 课表卡片 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,32 L70,32 A6,6 0 0 1 76,38 L76,70 A6,6 0 0 1 70,76 L38,76 A6,6 0 0 1 32,70 L32,38 A6,6 0 0 1 38,32 Z" />
+
+    <!-- 标题条 -->
+    <path
+        android:fillColor="#FFCBE6FF"
+        android:pathData="M39,36 L69,36 A3,3 0 0 1 72,39 L72,45 A3,3 0 0 1 69,48 L39,48 A3,3 0 0 1 36,45 L36,39 A3,3 0 0 1 39,36 Z" />
+
+    <!-- 装订孔 -->
+    <path
+        android:fillColor="#FF006494"
+        android:pathData="M41.5,42 a2.5,2.5 0 1 0 5,0 a2.5,2.5 0 1 0 -5,0 Z" />
+    <path
+        android:fillColor="#FF006494"
+        android:pathData="M61.5,42 a2.5,2.5 0 1 0 5,0 a2.5,2.5 0 1 0 -5,0 Z" />
+
+    <!-- 课程行 -->
+    <path
+        android:fillColor="#CC006494"
+        android:pathData="M40,56 L68,56 L68,59 L40,59 Z" />
+    <path
+        android:fillColor="#CC006494"
+        android:pathData="M40,63 L68,63 L68,66 L40,66 Z" />
+    <path
+        android:fillColor="#CC006494"
+        android:pathData="M40,70 L60,70 L60,73 L40,73 Z" />
+</vector>

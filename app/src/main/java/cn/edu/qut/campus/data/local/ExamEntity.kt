@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Transaction
 import cn.edu.qut.campus.data.model.Exam
 import kotlinx.coroutines.flow.Flow
 
@@ -35,4 +36,11 @@ interface ExamDao {
 
     @Query("DELETE FROM exams")
     suspend fun clearAll()
+
+    /** 清空 + 写入置于同一事务，避免中途失败清空考试数据 */
+    @Transaction
+    suspend fun replaceAll(exams: List<ExamEntity>) {
+        clearAll()
+        insertExams(exams)
+    }
 }

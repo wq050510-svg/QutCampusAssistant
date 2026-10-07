@@ -1,5 +1,6 @@
 package cn.edu.qut.campus.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
@@ -9,10 +10,12 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 
-enum class ScreenTab(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
+enum class ScreenTab(val title: String, val icon: ImageVector) {
     SCHEDULE("课表", Icons.Default.CalendarToday),
     EXAMS("考试", Icons.Default.EventNote),
     GRADES("成绩", Icons.Default.Assessment),
@@ -25,8 +28,21 @@ fun MainScreen(
     repository: ScheduleRepository,
     onLogout: () -> Unit
 ) {
-    var currentTab by remember { mutableStateOf(ScreenTab.SCHEDULE) }
-    var showCalendarSync by remember { mutableStateOf(false) }
+    // rememberSaveable：切页/旋屏/进程恢复后仍停留在原来的 Tab
+    var currentTab by rememberSaveable { mutableStateOf(ScreenTab.SCHEDULE) }
+    var showCalendarSync by rememberSaveable { mutableStateOf(false) }
+
+    // 登录后补齐本地缺失的数据（只同步缺的部分，且登录窗口期内不会重复登录）
+    LaunchedEffect(Unit) {
+        repository.autoSyncIfEmpty()
+    }
+
+    // 系统返回键：
+    // 1) 在日历页 → 回主界面；2) 在非课表 Tab → 回课表；3) 课表页 → 交给系统退出
+    BackHandler(enabled = showCalendarSync) { showCalendarSync = false }
+    BackHandler(enabled = !showCalendarSync && currentTab != ScreenTab.SCHEDULE) {
+        currentTab = ScreenTab.SCHEDULE
+    }
 
     if (showCalendarSync) {
         CalendarScreen(
@@ -37,7 +53,7 @@ fun MainScreen(
         Scaffold(
             bottomBar = {
                 NavigationBar {
-                    ScreenTab.values().forEach { tab ->
+                    ScreenTab.entries.forEach { tab ->
                         NavigationBarItem(
                             icon = { Icon(tab.icon, contentDescription = tab.title) },
                             label = { Text(tab.title) },

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 自适应启动图标背景色，与工程主色 @color/primary (#006494) 保持一致 -->
+    <color name="ic_launcher_background">#006494</color>
+</resources>

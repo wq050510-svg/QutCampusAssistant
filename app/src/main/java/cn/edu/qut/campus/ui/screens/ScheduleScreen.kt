@@ -3,38 +3,162 @@ package cn.edu.qut.campus.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.edu.qut.campus.data.model.CampusPeriod
 import cn.edu.qut.campus.data.model.Course
+import cn.edu.qut.campus.data.model.DAY_NAMES
+import cn.edu.qut.campus.data.model.cleanClassroom
+import cn.edu.qut.campus.data.model.dayNameOf
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 import java.time.LocalDate
 
-fun cleanClassroom(classroom: String): String {
-    return classroom
-        .replace("黄岛校区-", "")
-        .replace("市北校区-", "")
-        .replace("黄岛-", "")
-        .replace("市北-", "")
-        .trim()
+// ---------------------------------------------------------------------------
+// 文件级常量与纯函数。
+// 放在组合之外：常量不再每次重组新建，颜色/地点解析也不再按卡片重复执行。
+// ---------------------------------------------------------------------------
+
+/** 学期展示周数（课表数据固定按 1-20 周展示） */
+private const val WEEK_COUNT = 20
+
+/**
+ * 课表网格的大节起始节次：每 2 节为一个大节（1-2 / 3-4 / 5-6 / 7-8 / 9-10）。
+ * 直接从校区作息表推导，避免「作息时间改了但网格仍然硬编码 1,3,5,7,9」的漂移。
+ */
+private val GRID_START_PERIODS: List<Int> =
+    CampusPeriod.HUANGDAO_PERIODS.filterIndexed { index, _ -> index % 2 == 0 }.map { it.periodNumber }
+
+/** 浅色课程卡片使用的深色前景（#4DD0E1 / #81C784 / #FFB74D 这类亮色底上白字几乎看不清） */
+private val ON_LIGHT_COURSE_COLOR = Color(0xFF1F1F1F)
+
+/** 解析课程颜色：hex 非法时回退主题色。用 remember 包住，避免每帧都走一遍异常捕获 */
+@Composable
+private fun rememberCourseColor(colorHex: String): Color {
+    val fallback = MaterialTheme.colorScheme.primary
+    return remember(colorHex, fallback) {
+        try {
+            Color(android.graphics.Color.parseColor(colorHex))
+        } catch (e: Exception) {
+            fallback
+        }
+    }
+}
+
+/** 按底色亮度挑前景色：亮底用深字、暗底用白字，深色 / AMOLED 主题下同样可读 */
+private fun courseTextColorOn(bgColor: Color): Color =
+    if (bgColor.luminance() > 0.6f) ON_LIGHT_COURSE_COLOR else Color.White
+
+// 说明：去除教务校区前缀的字符串处理统一走公共实现
+// cn.edu.qut.campus.data.model.cleanClassroom，本文件不再自带一份。
+
+/** 课程身份：同名 + 同一天 + 同一节次视为同一门课（正方会把单双周不同教室拆成多条记录） */
+private fun courseIdentity(course: Course): String =
+    "${course.name}|${course.dayOfWeek}|${course.startPeriod}|${course.endPeriod}"
+
+/** 一个课表格子的预计算结果：本周生效的课程、非本周课程、是否存在真实冲突 */
+@Immutable
+private data class ScheduleCell(
+    val active: List<Course>,
+    val inactive: List<Course>,
+    val hasConflict: Boolean
+)
+
+private val EMPTY_CELL = ScheduleCell(emptyList(), emptyList(), false)
+
+/**
+ * 一次性构建「星期 → 大节起始节次 → 格子」索引。
+ *
+ * 原实现是在 35 个格子里各做 2 次全量 filter（含 weeksList.contains 线性扫描），
+ * 现在是整份课表只遍历一遍、itemContent 里 O(1) 查表；冲突判定也在这里一次算完，
+ * 不再随每个格子做 O(n²) 比较。
+ */
+private fun buildScheduleGrid(
+    courses: List<Course>,
+    selectedWeek: Int
+): Map<Int, Map<Int, ScheduleCell>> {
+    val buckets = HashMap<Int, HashMap<Int, MutableList<Course>>>()
+    for (course in courses) {
+        if (course.isPractice) continue
+        if (course.dayOfWeek !in 1..7) continue
+        for (start in GRID_START_PERIODS) {
+            val end = start + 1
+            if (course.startPeriod <= end && course.endPeriod >= start) {
+                buckets.getOrPut(course.dayOfWeek) { HashMap() }
+                    .getOrPut(start) { mutableListOf() }
+                    .add(course)
+            }
+        }
+    }
+
+    val grid = HashMap<Int, Map<Int, ScheduleCell>>(buckets.size)
+    for ((day, cells) in buckets) {
+        val dayCells = HashMap<Int, ScheduleCell>(cells.size)
+        for ((start, records) in cells) {
+            val active = mutableListOf<Course>()
+            val inactive = mutableListOf<Course>()
+            // 同名校同节次的多条记录（单双周分教室）：本周只保留真正生效的那条，
+            // 并且不判为冲突——否则每周都会误报一次「时间冲突」。
+            for ((_, group) in records.groupBy { courseIdentity(it) }) {
+                val activeInGroup = group.firstOrNull { it.isActiveInWeek(selectedWeek) }
+                if (activeInGroup != null) active.add(activeInGroup) else inactive.add(group.first())
+            }
+            dayCells[start] = ScheduleCell(
+                active = active,
+                inactive = inactive,
+                hasConflict = active.size > 1
+            )
+        }
+        grid[day] = dayCells
+    }
+    return grid
+}
+
+/** 日视图的课程列表与冲突伙伴（一次算完，卡片里只做 O(1) 查表） */
+private data class DaySchedule(
+    val courses: List<Course>,
+    val conflictPartners: Map<String, List<Course>>
+)
+
+private fun buildDaySchedule(courses: List<Course>, activeDay: Int, selectedWeek: Int): DaySchedule {
+    val dayCourses = courses
+        .filter { it.dayOfWeek == activeDay && it.isActiveInWeek(selectedWeek) && !it.isPractice }
+        // 单双周不同教室产生的同课多条记录：本周只有一条生效，这里再按课程身份去重
+        .distinctBy { courseIdentity(it) }
+        .sortedBy { it.startPeriod }
+
+    val partners = HashMap<String, List<Course>>()
+    for (course in dayCourses) {
+        val others = dayCourses.filter { other ->
+            other.id != course.id &&
+                other.name != course.name &&
+                maxOf(course.startPeriod, other.startPeriod) <= minOf(course.endPeriod, other.endPeriod)
+        }
+        if (others.isNotEmpty()) partners[course.id] = others
+    }
+    return DaySchedule(dayCourses, partners)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,16 +167,36 @@ fun ScheduleScreen(
     repository: ScheduleRepository,
     onNavigateToCalendar: () -> Unit
 ) {
-    val courses by repository.coursesFlow.collectAsState(initial = emptyList())
-    val currentWeek = remember { repository.calculateCurrentWeek() }
-    var selectedWeek by remember { mutableStateOf(currentWeek) }
-    var isDailyView by remember { mutableStateOf(false) }
-    var selectedCoursesDetail by remember { mutableStateOf<List<Course>?>(null) }
-    var currentCampus by remember { mutableStateOf(repository.prefs.campus.ifEmpty { "黄岛校区" }) }
-    var showCampusDialog by remember { mutableStateOf(false) }
+    val courses by repository.coursesFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val campusState by repository.prefs.campusFlow.collectAsStateWithLifecycle()
+    // 与其它页面一致：prefs 里可能是空串，此时兜底到黄岛校区
+    val currentCampus = campusState.ifEmpty { "黄岛校区" }
+    // 学期名（如 2026-2027-1）由开学日期推导，不再写死
+    val termLabel = remember(repository) { repository.prefs.termLabel }
 
-    val todayDayOfWeek = remember { LocalDate.now().dayOfWeek.value } // 1 (Mon) - 7 (Sun)
-    val dayNames = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+    // 关键 UI 状态用 rememberSaveable：旋屏 / 进程重建后不再被打回默认值。
+    // 注意：底部 Tab 切换会让本页离开组合，跨 Tab 保留需要在 MainNavigation 用 SaveableStateHolder。
+    var currentWeek by rememberSaveable { mutableIntStateOf(repository.calculateCurrentWeek()) }
+    var selectedWeek by rememberSaveable { mutableIntStateOf(currentWeek) }
+    var isDailyView by rememberSaveable { mutableStateOf(false) }
+    var showCampusDialog by remember { mutableStateOf(false) }
+    var selectedCoursesDetail by remember { mutableStateOf<List<Course>?>(null) }
+
+    // 1 (周一) - 7 (周日)
+    var todayDayOfWeek by rememberSaveable { mutableIntStateOf(LocalDate.now().dayOfWeek.value) }
+    var activeDay by rememberSaveable { mutableIntStateOf(todayDayOfWeek) }
+
+    // 回到前台时重新推导「当前第几周 / 今天星期几」：
+    // 否则 App 长期驻留后台（隔天甚至隔周再打开）周次会停留在打开那一刻。
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        val refreshedWeek = repository.calculateCurrentWeek()
+        val wasFollowingCurrentWeek = selectedWeek == currentWeek
+        currentWeek = refreshedWeek
+        if (wasFollowingCurrentWeek) selectedWeek = refreshedWeek
+        val refreshedToday = LocalDate.now().dayOfWeek.value
+        todayDayOfWeek = refreshedToday
+        activeDay = refreshedToday
+    }
 
     Scaffold(
         topBar = {
@@ -84,10 +228,12 @@ fun ScheduleScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
+                                // 触控高度至少 48dp：这一行是切换校区的入口
+                                .heightIn(min = 48.dp)
                                 .clickable { showCampusDialog = true }
                         ) {
                             Text(
-                                text = "$currentCampus • 2026-2027-1",
+                                text = "$currentCampus • $termLabel",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -105,7 +251,7 @@ fun ScheduleScreen(
                     IconButton(onClick = { isDailyView = !isDailyView }) {
                         Icon(
                             imageVector = if (isDailyView) Icons.Default.ViewWeek else Icons.Default.ViewDay,
-                            contentDescription = "切换视图"
+                            contentDescription = if (isDailyView) "切换到周视图" else "切换到每日视图"
                         )
                     }
                     // 跳转日历同步
@@ -133,9 +279,10 @@ fun ScheduleScreen(
                 DailyScheduleView(
                     courses = courses,
                     selectedWeek = selectedWeek,
-                    todayDayOfWeek = todayDayOfWeek,
+                    activeDay = activeDay,
+                    onDaySelected = { activeDay = it },
                     currentCampus = currentCampus,
-                    onCoursesClick = { selectedCoursesDetail = it }
+                    onCoursesClick = { selectedCoursesDetail = it.distinctBy { c -> c.id } }
                 )
             } else {
                 // 经典周课表网格视图
@@ -143,9 +290,8 @@ fun ScheduleScreen(
                     courses = courses,
                     selectedWeek = selectedWeek,
                     todayDayOfWeek = todayDayOfWeek,
-                    dayNames = dayNames,
                     currentCampus = currentCampus,
-                    onCoursesClick = { selectedCoursesDetail = it }
+                    onCoursesClick = { selectedCoursesDetail = it.distinctBy { c -> c.id } }
                 )
             }
         }
@@ -182,7 +328,6 @@ fun ScheduleScreen(
                                     .fillMaxWidth()
                                     .clickable {
                                         repository.prefs.campus = cName
-                                        currentCampus = cName
                                         showCampusDialog = false
                                     }
                             ) {
@@ -228,14 +373,22 @@ fun WeekSelectorBar(
     currentWeek: Int,
     onWeekSelected: (Int) -> Unit
 ) {
-    Row(
+    val listState = rememberLazyListState()
+
+    // 进入页面 / 当前周变化（跨周回到前台）时，把「本周」自动滚到可见位置
+    LaunchedEffect(currentWeek) {
+        listState.animateScrollToItem((currentWeek - 1).coerceIn(0, WEEK_COUNT - 1))
+    }
+
+    LazyRow(
+        state = listState,
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        for (w in 1..20) {
+        items(WEEK_COUNT, key = { it }) { index ->
+            val w = index + 1
             val isSelected = w == selectedWeek
             val isCurrent = w == currentWeek
             FilterChip(
@@ -260,11 +413,15 @@ fun WeeklyGridView(
     courses: List<Course>,
     selectedWeek: Int,
     todayDayOfWeek: Int,
-    dayNames: List<String>,
     currentCampus: String,
     onCoursesClick: (List<Course>) -> Unit
 ) {
-    val periods = listOf(1, 3, 5, 7, 9) // 代表 1-2节, 3-4节, 5-6节, 7-8节, 9-10节
+    // 星期 → 大节起始节次 → 格子：只在课表数据或所看周次变化时重建一次
+    val scheduleGrid = remember(courses, selectedWeek) { buildScheduleGrid(courses, selectedWeek) }
+    // 实践 / 短学期课程不进正常网格，单独在下方分区展示（否则会被 !isPractice 过滤到任何界面都看不见）
+    val practiceCourses = remember(courses) {
+        courses.filter { it.isPractice }.sortedWith(compareBy({ it.dayOfWeek }, { it.startPeriod }))
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // 星期表头
@@ -286,7 +443,7 @@ fun WeeklyGridView(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = dayNames[day - 1],
+                        text = DAY_NAMES[day - 1],
                         fontSize = 12.sp,
                         fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
                         color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
@@ -307,7 +464,7 @@ fun WeeklyGridView(
 
         // 课表主体网格
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(periods) { startPeriod ->
+            items(GRID_START_PERIODS, key = { it }) { startPeriod ->
                 val endPeriod = startPeriod + 1
                 val (startTime, endTime) = CampusPeriod.getTimeRange(startPeriod, endPeriod, currentCampus)
 
@@ -331,15 +488,9 @@ fun WeeklyGridView(
                         Text("$endPeriod", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
 
-                    // 1-7 周一至周日课程格
+                    // 1-7 周一至周日课程格：只做 O(1) 查表，过滤与冲突判定已在 remember 块里算完
                     for (day in 1..7) {
-                        val cellCourses = courses.filter {
-                            it.dayOfWeek == day &&
-                            it.startPeriod <= endPeriod &&
-                            it.endPeriod >= startPeriod &&
-                            !it.isPractice
-                        }
-                        val activeCourses = cellCourses.filter { it.isActiveInWeek(selectedWeek) }
+                        val cell = scheduleGrid[day]?.get(startPeriod) ?: EMPTY_CELL
 
                         Box(
                             modifier = Modifier
@@ -347,60 +498,58 @@ fun WeeklyGridView(
                                 .fillMaxHeight()
                                 .padding(1.5.dp)
                         ) {
-                            if (activeCourses.isNotEmpty()) {
-                                if (activeCourses.size == 1) {
-                                    CourseCard(
-                                        course = activeCourses.first(),
-                                        isActive = true,
-                                        onClick = { onCoursesClick(activeCourses) }
-                                    )
-                                } else {
-                                    // 发生时间冲突（同一节有多门课程）
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clickable { onCoursesClick(activeCourses) },
-                                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                                    ) {
-                                        activeCourses.take(2).forEach { course ->
-                                            MiniCourseCard(
-                                                course = course,
-                                                isActive = true,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                        }
-                                    }
-                                    // 冲突提示红标
-                                    Surface(
-                                        color = Color(0xFFD32F2F),
-                                        shape = RoundedCornerShape(bottomStart = 6.dp, topEnd = 6.dp),
-                                        modifier = Modifier.align(Alignment.TopEnd)
-                                    ) {
-                                        Text(
-                                            text = if (activeCourses.size == 2) "冲突" else "${activeCourses.size}冲突",
-                                            color = Color.White,
-                                            fontSize = 8.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                            if (cell.hasConflict) {
+                                // 同一节存在两门及以上不同课程：真实时间冲突
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clickable { onCoursesClick(cell.active) },
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    cell.active.take(2).forEach { course ->
+                                        MiniCourseCard(
+                                            course = course,
+                                            isActive = true,
+                                            modifier = Modifier.weight(1f)
                                         )
                                     }
                                 }
-                            } else if (cellCourses.isNotEmpty()) {
+                                // 冲突提示标（语义色，深色 / AMOLED 下不再是刺眼浅红块）
+                                Surface(
+                                    color = MaterialTheme.colorScheme.error,
+                                    shape = RoundedCornerShape(bottomStart = 6.dp, topEnd = 6.dp),
+                                    modifier = Modifier.align(Alignment.TopEnd)
+                                ) {
+                                    Text(
+                                        text = if (cell.active.size == 2) "冲突" else "${cell.active.size}冲突",
+                                        color = MaterialTheme.colorScheme.onError,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                                    )
+                                }
+                            } else if (cell.active.size == 1) {
+                                CourseCard(
+                                    course = cell.active.first(),
+                                    isActive = true,
+                                    onClick = { onCoursesClick(cell.active) }
+                                )
+                            } else if (cell.inactive.isNotEmpty()) {
                                 // 非本周课弱化透明显示
-                                if (cellCourses.size == 1) {
+                                if (cell.inactive.size == 1) {
                                     CourseCard(
-                                        course = cellCourses.first(),
+                                        course = cell.inactive.first(),
                                         isActive = false,
-                                        onClick = { onCoursesClick(cellCourses) }
+                                        onClick = { onCoursesClick(cell.inactive) }
                                     )
                                 } else {
                                     Column(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .clickable { onCoursesClick(cellCourses) },
+                                            .clickable { onCoursesClick(cell.inactive) },
                                         verticalArrangement = Arrangement.spacedBy(2.dp)
                                     ) {
-                                        cellCourses.take(2).forEach { course ->
+                                        cell.inactive.take(2).forEach { course ->
                                             MiniCourseCard(
                                                 course = course,
                                                 isActive = false,
@@ -409,13 +558,13 @@ fun WeeklyGridView(
                                         }
                                     }
                                     Surface(
-                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
                                         shape = RoundedCornerShape(bottomStart = 6.dp, topEnd = 6.dp),
                                         modifier = Modifier.align(Alignment.TopEnd)
                                     ) {
                                         Text(
-                                            text = "${cellCourses.size}门",
-                                            color = Color.White,
+                                            text = "${cell.inactive.size}门",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             fontSize = 8.sp,
                                             modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
                                         )
@@ -426,6 +575,139 @@ fun WeeklyGridView(
                     }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
+            }
+
+            // 实践环节分区：实践 / 短学期课程不占正常课表格子，但不能因此「消失」
+            if (practiceCourses.isNotEmpty()) {
+                item(key = "practice_section") {
+                    PracticeSection(
+                        practiceCourses = practiceCourses,
+                        selectedWeek = selectedWeek,
+                        onCoursesClick = onCoursesClick
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 实践 / 短学期课程分区。
+ *
+ * 这类课程（isPractice = true）在教务数据里没有可用的真实星期与节次，
+ * 之前被周网格与日视图的 `!isPractice` 过滤后在任何界面都看不到（与 README「实践课不遗漏」矛盾）。
+ * 这里整学期列出，本周生效的高亮并打上「本周」标记，字段缺失时显示「待定」。
+ */
+@Composable
+fun PracticeSection(
+    practiceCourses: List<Course>,
+    selectedWeek: Int,
+    onCoursesClick: (List<Course>) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.School,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "实践环节",
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "共 ${practiceCourses.size} 项",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        practiceCourses.forEach { course ->
+            PracticeCourseCard(
+                course = course,
+                isThisWeek = course.isActiveInWeek(selectedWeek),
+                onClick = { onCoursesClick(listOf(course)) }
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+private fun PracticeCourseCard(
+    course: Course,
+    isThisWeek: Boolean,
+    onClick: () -> Unit
+) {
+    val accentColor = rememberCourseColor(course.colorHex)
+    val weeksText = remember(course.weeksDescription) { course.weeksDescription.ifBlank { "待定" } }
+    val teacherText = remember(course.teacher) { course.teacher.ifBlank { "待定" } }
+    val classroomText = remember(course.classroom) { cleanClassroom(course.classroom).ifBlank { "待定" } }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isThisWeek) 0.6f else 0.3f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(accentColor)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = course.name,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "$weeksText • $teacherText",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "地点：$classroomText",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (isThisWeek) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = "本周",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
             }
         }
     }
@@ -438,13 +720,11 @@ fun CourseCard(
     isActive: Boolean,
     onClick: () -> Unit
 ) {
-    val bgBase = try {
-        Color(android.graphics.Color.parseColor(course.colorHex))
-    } catch (e: Exception) {
-        MaterialTheme.colorScheme.primary
-    }
+    val bgBase = rememberCourseColor(course.colorHex)
     val bgColor = if (isActive) bgBase else bgBase.copy(alpha = 0.25f)
-    val textColor = if (isActive) Color.White else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+    // 亮色课程卡（#4DD0E1 / #81C784 / #FFB74D 等）用深色字，暗色用白字
+    val textColor = if (isActive) courseTextColorOn(bgBase) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+    val classroomText = remember(course.classroom) { cleanClassroom(course.classroom) }
 
     Surface(
         color = bgColor,
@@ -473,13 +753,14 @@ fun CourseCard(
                 if (course.isRetake) {
                     Text(
                         text = "重修",
-                        color = if (isActive) Color.Yellow else textColor,
+                        // 固定黄色在浅色课程底上同样看不清，统一跟随对比度选出的前景色
+                        color = textColor,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
                 Text(
-                    text = cleanClassroom(course.classroom),
+                    text = classroomText,
                     color = textColor,
                     fontSize = 10.sp,
                     maxLines = 1,
@@ -497,13 +778,10 @@ fun MiniCourseCard(
     isActive: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val bgBase = try {
-        Color(android.graphics.Color.parseColor(course.colorHex))
-    } catch (e: Exception) {
-        MaterialTheme.colorScheme.primary
-    }
+    val bgBase = rememberCourseColor(course.colorHex)
     val bgColor = if (isActive) bgBase else bgBase.copy(alpha = 0.25f)
-    val textColor = if (isActive) Color.White else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+    val textColor = if (isActive) courseTextColorOn(bgBase) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+    val classroomText = remember(course.classroom) { cleanClassroom(course.classroom) }
 
     Surface(
         color = bgColor,
@@ -525,7 +803,7 @@ fun MiniCourseCard(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = cleanClassroom(course.classroom),
+                text = classroomText,
                 color = textColor.copy(alpha = 0.9f),
                 fontSize = 8.sp,
                 maxLines = 1,
@@ -540,12 +818,16 @@ fun MiniCourseCard(
 fun DailyScheduleView(
     courses: List<Course>,
     selectedWeek: Int,
-    todayDayOfWeek: Int,
+    activeDay: Int,
+    onDaySelected: (Int) -> Unit,
     currentCampus: String,
     onCoursesClick: (List<Course>) -> Unit
 ) {
-    var activeDay by remember { mutableStateOf(todayDayOfWeek) }
-    val dayNames = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+    // 过滤 / 排序 / 冲突计算只在这里做一次，itemContent 里只查表
+    val dayData = remember(courses, activeDay, selectedWeek) {
+        buildDaySchedule(courses, activeDay, selectedWeek)
+    }
+    val dayCourses = dayData.courses
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         // 星期选择栏
@@ -556,22 +838,18 @@ fun DailyScheduleView(
             for (d in 1..7) {
                 val isSelected = d == activeDay
                 OutlinedButton(
-                    onClick = { activeDay = d },
+                    onClick = { onDaySelected(d) },
                     shape = RoundedCornerShape(10.dp),
                     colors = if (isSelected) ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer) else ButtonDefaults.outlinedButtonColors(),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     modifier = Modifier.height(38.dp)
                 ) {
-                    Text(dayNames[d - 1], fontSize = 12.sp)
+                    Text(DAY_NAMES[d - 1], fontSize = 12.sp)
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-
-        val dayCourses = courses.filter {
-            it.dayOfWeek == activeDay && it.isActiveInWeek(selectedWeek) && !it.isPractice
-        }.sortedBy { it.startPeriod }
 
         if (dayCourses.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -588,18 +866,13 @@ fun DailyScheduleView(
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(dayCourses) { course ->
+                items(dayCourses, key = { it.id }) { course ->
                     val (sTime, eTime) = CampusPeriod.getTimeRange(course.startPeriod, course.endPeriod, currentCampus)
-                    val cardColor = try {
-                        Color(android.graphics.Color.parseColor(course.colorHex))
-                    } catch (e: Exception) {
-                        MaterialTheme.colorScheme.primary
-                    }
+                    val cardColor = rememberCourseColor(course.colorHex)
+                    val classroomText = remember(course.classroom) { cleanClassroom(course.classroom) }
 
-                    val conflictingWithThis = dayCourses.filter { other ->
-                        other != course &&
-                        maxOf(course.startPeriod, other.startPeriod) <= minOf(course.endPeriod, other.endPeriod)
-                    }
+                    // 冲突伙伴已在 remember 块里算好，这里直接取
+                    val conflictingWithThis = dayData.conflictPartners[course.id].orEmpty()
                     val hasConflict = conflictingWithThis.isNotEmpty()
 
                     Card(
@@ -635,12 +908,12 @@ fun DailyScheduleView(
                                     if (hasConflict) {
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Surface(
-                                            color = Color(0xFFFFCDD2),
+                                            color = MaterialTheme.colorScheme.errorContainer,
                                             shape = RoundedCornerShape(4.dp)
                                         ) {
                                             Text(
                                                 text = "时间冲突",
-                                                color = Color(0xFFC62828),
+                                                color = MaterialTheme.colorScheme.onErrorContainer,
                                                 fontSize = 10.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
@@ -650,7 +923,7 @@ fun DailyScheduleView(
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "${cleanClassroom(course.classroom)} • ${course.teacher}",
+                                    text = "$classroomText • ${course.teacher}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -694,9 +967,9 @@ fun CourseDetailBottomSheet(
             val isConflict = courses.size > 1
 
             if (isConflict) {
-                // 冲突警告横幅
+                // 冲突警告横幅（语义色：深色 / AMOLED 下不再是一大块浅红）
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -709,7 +982,7 @@ fun CourseDetailBottomSheet(
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = null,
-                            tint = Color(0xFFD32F2F),
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
                             modifier = Modifier.size(28.dp)
                         )
                         Spacer(modifier = Modifier.width(12.dp))
@@ -717,14 +990,14 @@ fun CourseDetailBottomSheet(
                             Text(
                                 text = "课程时间重叠安排（共 ${courses.size} 门）",
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFFD32F2F),
+                                color = MaterialTheme.colorScheme.onErrorContainer,
                                 fontSize = 15.sp
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = "第 $selectedWeek 周检测到以下课程上课时间存在重叠，请向任课教师确认上课或考试安排：",
                                 fontSize = 12.sp,
-                                color = Color(0xFFC62828),
+                                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
                                 lineHeight = 16.sp
                             )
                         }
@@ -738,7 +1011,7 @@ fun CourseDetailBottomSheet(
                     .heightIn(max = 480.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                items(courses) { course ->
+                items(courses, key = { it.id }) { course ->
                     SingleCourseDetailCard(course = course, currentCampus = currentCampus)
                 }
             }
@@ -759,6 +1032,8 @@ fun SingleCourseDetailCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // 提到 Column 作用域：下面 Row 内外都要用，避免作用域外引用
+            val classroomText = remember(course.classroom) { cleanClassroom(course.classroom) }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -768,11 +1043,7 @@ fun SingleCourseDetailCard(
                     modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val courseColor = try {
-                        Color(android.graphics.Color.parseColor(course.colorHex))
-                    } catch (e: Exception) {
-                        MaterialTheme.colorScheme.primary
-                    }
+                    val courseColor = rememberCourseColor(course.colorHex)
                     Box(
                         modifier = Modifier
                             .size(12.dp)
@@ -788,12 +1059,12 @@ fun SingleCourseDetailCard(
                 }
                 if (course.isRetake) {
                     Surface(
-                        color = Color(0xFFFFCC80),
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
                         shape = RoundedCornerShape(6.dp)
                     ) {
                         Text(
                             text = "重修课程",
-                            color = Color(0xFFE65100),
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -804,11 +1075,20 @@ fun SingleCourseDetailCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            DetailItem(icon = Icons.Default.Room, label = "上课地点", value = "${cleanClassroom(course.classroom)} ($currentCampus)")
+            DetailItem(icon = Icons.Default.Room, label = "上课地点", value = "$classroomText ($currentCampus)")
             DetailItem(icon = Icons.Default.Person, label = "任课教师", value = course.teacher.ifEmpty { "待定" })
-            DetailItem(icon = Icons.Default.DateRange, label = "开课周次", value = course.weeksDescription)
+            DetailItem(icon = Icons.Default.DateRange, label = "开课周次", value = course.weeksDescription.ifBlank { "待定" })
             val (s, e) = CampusPeriod.getTimeRange(course.startPeriod, course.endPeriod, currentCampus)
-            DetailItem(icon = Icons.Default.Schedule, label = "上课节次", value = "星期${course.dayOfWeek} 第${course.startPeriod}-${course.endPeriod}节 ($s ~ $e)")
+            DetailItem(
+                icon = Icons.Default.Schedule,
+                label = "上课节次",
+                // 实践 / 短学期课程没有真实节次，避免显示按兜底作息算出的假时间
+                value = if (course.isPractice) {
+                    "实践环节，以学院通知为准"
+                } else {
+                    "${dayNameOf(course.dayOfWeek)} 第${course.startPeriod}-${course.endPeriod}节 ($s ~ $e)"
+                }
+            )
             DetailItem(icon = Icons.Default.Stars, label = "课程学分", value = "${course.credit} 学分")
         }
     }

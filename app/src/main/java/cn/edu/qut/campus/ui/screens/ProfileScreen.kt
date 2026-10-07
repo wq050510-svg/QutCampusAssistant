@@ -24,12 +24,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import cn.edu.qut.campus.QutApplication
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import cn.edu.qut.campus.data.local.AppPreferences
+import cn.edu.qut.campus.data.model.CampusPeriod
 import cn.edu.qut.campus.data.repository.ScheduleRepository
+import cn.edu.qut.campus.ui.components.CampusPickerDialog
+import cn.edu.qut.campus.ui.components.readableSyncError
 import cn.edu.qut.campus.widget.ScheduleWidgetProvider
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,14 +48,24 @@ fun ProfileScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val prefs = remember { QutApplication.instance.preferences }
-    val darkModeOption by prefs.darkModeFlow.collectAsState()
+    // 统一走 repository.prefs（与课表/日历/服务层同一个 SharedPreferences 实例）
+    val prefs = repository.prefs
+    val darkModeOption by prefs.darkModeFlow.collectAsStateWithLifecycle()
 
     var isSyncingAll by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showScheduleDetails by remember { mutableStateOf(false) }
-    var currentCampus by remember { mutableStateOf(prefs.campus.ifEmpty { "黄岛校区" }) }
     var showCampusDialog by remember { mutableStateOf(false) }
+
+    // P1: 校区改为 Flow 驱动，不再在组合期快照，切换后本页标题/作息表立即联动
+    val currentCampus = prefs.campusFlow.collectAsStateWithLifecycle().value.ifEmpty { "黄岛校区" }
+
+    // P1: 提醒时长以 prefs.calendarReminderMinutes 为唯一数据源，选项与日历页共用 REMINDER_OPTIONS
+    var reminderMinutes by remember { mutableStateOf(prefs.calendarReminderMinutes) }
+
+    // 「正方教务系统已连接」改为展示真实信息：登录方式 + 上次同步时间
+    var lastSyncAt by remember { mutableStateOf(prefs.lastSyncAt) }
+    val authLabel = if (prefs.loginType == "sso") "统一身份认证 (SSO)" else "正方教务系统直连"
 
     val appVersionName = remember {
         try {
@@ -69,13 +87,16 @@ fun ProfileScreen(
                 val aRes = repository.syncAcademicProgress()
 
                 if (sRes.isSuccess || gRes.isSuccess || aRes.isSuccess) {
+                    // 记录真实的上次同步时间，供身份卡片展示
+                    prefs.lastSyncAt = System.currentTimeMillis()
+                    lastSyncAt = prefs.lastSyncAt
                     Toast.makeText(context, "全量教务数据已同步至最新！", Toast.LENGTH_SHORT).show()
                 } else {
-                    val errMsg = sRes.exceptionOrNull()?.localizedMessage ?: "网络或会话异常"
-                    Toast.makeText(context, "同步失败: $errMsg", Toast.LENGTH_SHORT).show()
+                    // 错误统一走 readableSyncError，不再直接拼 exception.message
+                    Toast.makeText(context, "同步失败：${readableSyncError(sRes.exceptionOrNull())}", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, "同步出错: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "同步出错：${readableSyncError(e)}", Toast.LENGTH_SHORT).show()
             } finally {
                 isSyncingAll = false
             }
@@ -193,7 +214,10 @@ fun ProfileScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Box(
                                 modifier = Modifier
                                     .size(8.dp)
@@ -202,11 +226,17 @@ fun ProfileScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "正方教务系统已连接",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                // 真实状态：登录方式 + 上次同步时间（0 显示「尚未同步」）
+                                text = "$authLabel · ${formatLastSyncTime(lastSyncAt)}",
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                         }
+
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         Surface(
                             shape = RoundedCornerShape(6.dp),
@@ -297,7 +327,7 @@ fun ProfileScreen(
                 }
             }
 
-            // 3. 黄岛校区教学作息与时间表
+            // 3. 当前校区教学作息与时间表（数据源：CampusPeriod）
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
@@ -339,14 +369,26 @@ fun ProfileScreen(
                                 .padding(top = 10.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            val times = listOf(
-                                "第 1 - 2 节" to "08:00 - 09:50 (上午第1大节)",
-                                "第 3 - 4 节" to "10:05 - 11:55 (上午第2大节)",
-                                "第 5 - 6 节" to "14:00 - 15:50 (下午第1大节)",
-                                "第 7 - 8 节" to "16:05 - 17:55 (下午第2大节)",
-                                "第 9 - 10 节" to "19:00 - 20:35 (晚上晚自习/公选)"
+                            // 作息时间统一从 CampusPeriod 渲染，不再与数据源重复维护一份硬编码表
+                            val periods = CampusPeriod.getPeriods(currentCampus)
+                            val sessionLabels = listOf(
+                                "上午第1大节", "上午第2大节",
+                                "下午第1大节", "下午第2大节",
+                                "晚上晚自习/公选"
                             )
-                            times.forEach { (period, time) ->
+                            periods.chunked(2).forEachIndexed { index, group ->
+                                val start = group.first()
+                                val end = group.last()
+                                val periodText = if (group.size > 1) {
+                                    "第 ${start.periodNumber} - ${end.periodNumber} 节"
+                                } else {
+                                    "第 ${start.periodNumber} 节"
+                                }
+                                val label = sessionLabels.getOrNull(index)
+                                val timeText = buildString {
+                                    append("${start.startTimeFormatted} - ${end.endTimeFormatted}")
+                                    if (!label.isNullOrEmpty()) append(" ($label)")
+                                }
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -354,8 +396,8 @@ fun ProfileScreen(
                                         .padding(horizontal = 10.dp, vertical = 7.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text(period, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                                    Text(time, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(periodText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                                    Text(timeText, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
@@ -392,16 +434,18 @@ fun ProfileScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        listOf(10 to "10分钟", 15 to "15分钟", 20 to "20分钟", 30 to "30分钟").forEach { (mins, text) ->
+                        // 选项与日历页统一取自 AppPreferences.REMINDER_OPTIONS，两页不会互相覆盖
+                        AppPreferences.REMINDER_OPTIONS.forEach { mins ->
                             FilterChip(
-                                selected = prefs.calendarReminderMinutes == mins,
+                                selected = reminderMinutes == mins,
                                 onClick = {
+                                    reminderMinutes = mins
                                     prefs.calendarReminderMinutes = mins
                                     Toast.makeText(context, "已设置课前提前 $mins 分钟提醒", Toast.LENGTH_SHORT).show()
                                 },
                                 label = {
                                     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                        Text(text, fontSize = 11.sp, maxLines = 1)
+                                        Text("$mins 分钟", fontSize = 11.sp, maxLines = 1)
                                     }
                                 },
                                 shape = RoundedCornerShape(8.dp),
@@ -589,8 +633,17 @@ fun ProfileScreen(
                     Button(
                         onClick = {
                             showLogoutDialog = false
-                            prefs.clear()
-                            onLogout()
+                            coroutineScope.launch {
+                                try {
+                                    // 确认文案承诺清除离线课表/成绩/考试，这里必须真的清 Room
+                                    repository.clearAllLocalData()
+                                } catch (e: Exception) {
+                                    // 清库失败也必须退出登录，否则用户被困在已失效的会话里
+                                } finally {
+                                    prefs.clear()
+                                    onLogout()
+                                }
+                            }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
@@ -605,64 +658,33 @@ fun ProfileScreen(
             )
         }
 
-        // 切换校区对话框
+        // 切换校区对话框（与课表页共用 ui/components/CampusPickerDialog）
         if (showCampusDialog) {
-            AlertDialog(
-                onDismissRequest = { showCampusDialog = false },
-                title = { Text("切换就读校区") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "选择您的就读校区，将自动联动课表、日历同步与考场地点信息：",
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        listOf("黄岛校区", "市北校区").forEach { cName ->
-                            val isSelected = cName == currentCampus
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        prefs.campus = cName
-                                        currentCampus = cName
-                                        showCampusDialog = false
-                                        Toast.makeText(context, "已切换为 $cName", Toast.LENGTH_SHORT).show()
-                                    }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Column {
-                                        Text(
-                                            text = cName,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = if (cName == "黄岛校区") "嘉陵江东路" else "抚顺路",
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    if (isSelected) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                    }
-                                }
-                            }
-                        }
-                    }
+            CampusPickerDialog(
+                current = currentCampus,
+                onSelect = { cName ->
+                    prefs.campus = cName
+                    Toast.makeText(context, "已切换为 $cName", Toast.LENGTH_SHORT).show()
                 },
-                confirmButton = {
-                    TextButton(onClick = { showCampusDialog = false }) {
-                        Text("关闭")
-                    }
-                }
+                onDismiss = { showCampusDialog = false }
             )
         }
+    }
+}
+
+/**
+ * 容错地把「上次同步」时间戳格式化成可读文案。
+ * 0 或异常值统一显示「尚未同步」，绝不因格式化失败而崩溃。
+ */
+private fun formatLastSyncTime(timestamp: Long): String {
+    if (timestamp <= 0L) return "尚未同步"
+    return try {
+        val date = Date(timestamp)
+        val dayText = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(date)
+        val timeText = SimpleDateFormat("HH:mm", Locale.CHINA).format(date)
+        val todayText = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date())
+        if (dayText == todayText) "今天 $timeText" else "$dayText $timeText"
+    } catch (e: Exception) {
+        "尚未同步"
     }
 }

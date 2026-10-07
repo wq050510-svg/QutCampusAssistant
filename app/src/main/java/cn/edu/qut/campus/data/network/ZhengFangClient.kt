@@ -30,6 +30,8 @@ class ZhengFangClient {
         .cookieJar(cookieJar)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
+        // 单次请求总超时：避免弱网下 connect/read 各自不超时却整体卡死
+        .callTimeout(30, TimeUnit.SECONDS)
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
@@ -55,8 +57,10 @@ class ZhengFangClient {
     }
 
     private fun getColorForCourse(name: String): String {
-        val hash = Math.abs(name.hashCode())
-        return COURSE_COLORS[hash % COURSE_COLORS.size]
+        // 不能用 Math.abs(hashCode())：hashCode 为 Int.MIN_VALUE 时 abs 仍是负数，
+        // 会造成负数下标越界，进而让整次课表同步失败
+        val index = (name.hashCode() % COURSE_COLORS.size + COURSE_COLORS.size) % COURSE_COLORS.size
+        return COURSE_COLORS[index]
     }
 
     // 原生 RSA 加密
@@ -79,8 +83,9 @@ class ZhengFangClient {
                 .url("$BASE_URL/xtgl/login_slogin.html")
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
                 .build()
-            val loginPageRes = client.newCall(loginPageReq).execute()
-            val html = loginPageRes.body?.string().orEmpty()
+            val html = client.newCall(loginPageReq).execute().use { res ->
+                res.body?.string().orEmpty()
+            }
 
             val tokenMatcher = Pattern.compile("id=\"csrftoken\" value=\"([^\"]+)\"").matcher(html)
             val csrfToken = if (tokenMatcher.find()) tokenMatcher.group(1) else ""
@@ -90,10 +95,15 @@ class ZhengFangClient {
             val keyReq = Request.Builder()
                 .url("$BASE_URL/xtgl/login_getPublicKey.html?time=$time")
                 .build()
-            val keyRes = client.newCall(keyReq).execute()
-            val keyJson = gson.fromJson(keyRes.body?.string(), JsonObject::class.java)
-            val modulus = keyJson.get("modulus").asString
-            val exponent = keyJson.get("exponent").asString
+            val keyJson = client.newCall(keyReq).execute().use { res ->
+                gson.fromJson(res.body?.string(), JsonObject::class.java)
+            } ?: return@withContext Result.failure(IllegalStateException("未获取到登录加密公钥，请稍后重试"))
+            val modulus = keyJson.get("modulus")?.asString.orEmpty()
+            val exponent = keyJson.get("exponent")?.asString.orEmpty()
+            if (modulus.isBlank() || exponent.isBlank()) {
+                // 拿不到公钥时绝不退化成明文提交密码
+                return@withContext Result.failure(IllegalStateException("登录加密公钥异常，请稍后重试"))
+            }
 
             // 3. 执行加密
             val encryptedPassword = encryptPassword(password, modulus, exponent)
@@ -114,25 +124,25 @@ class ZhengFangClient {
                 .post(formBody)
                 .build()
 
-            val loginRes = client.newCall(loginReq).execute()
-            val statusCode = loginRes.code
-            val location = loginRes.header("Location").orEmpty()
+            val (statusCode, location) = client.newCall(loginReq).execute().use { res ->
+                res.code to res.header("Location").orEmpty()
+            }
 
             if (statusCode in 301..302 || location.contains("index_initMenu")) {
                 // 登录成功，访问主页初始化 Session
                 val fullLoc = if (location.startsWith("http")) location else "https://jxgl.qut.edu.cn$location"
                 val homeReq = Request.Builder().url(fullLoc).build()
-                client.newCall(homeReq).execute()
+                client.newCall(homeReq).execute().close()
 
-                // 拉取课表初始信息提取用户详情
-                val scheduleResult = fetchSchedule("2026", "3")
+                // 姓名/班级/专业由学业模块抓取后回写（此处不再填「青理同学」这类占位名，
+                // 之前写死的名字会让用户以为身份信息根本没同步成功）
                 val user = User(
                     studentId = studentId,
-                    name = "青理同学",
+                    name = "",
                     className = "",
                     major = "",
                     grade = "",
-                    campus = "黄岛校区"
+                    campus = ""
                 )
 
                 Result.success(user)
@@ -171,7 +181,7 @@ class ZhengFangClient {
                 redirectCount++
             }
 
-            val loginPageHtml = currentRes.body?.string().orEmpty()
+            val loginPageHtml = currentRes.use { it.body?.string().orEmpty() }
             val loginPageUrl = currentRes.request.url
 
             // 2. 从表单页面中提取 pid 和 publicKey
@@ -187,10 +197,21 @@ class ZhengFangClient {
                 if (!g1.isNullOrEmpty()) g1 else keyMatcher.group(2).orEmpty()
             } else ""
 
-            // 3. 密码加密（如果启用了 publicKey 则 RSA 加密，否则提交明文）
+            // 3. 密码处理：
+            //    页面提供 RSA 公钥时必须加密提交；加密失败则中止（绝不退回明文）。
+            //    页面未提供公钥时，按原协议提交，但**仅允许在 https 通道下**，
+            //    避免把教务密码发到明文连接上。
             val finalPassword = if (publicKey.isNotBlank()) {
                 encryptSsoPassword(password, publicKey)
+                    ?: return@withContext Result.failure(
+                        IllegalStateException("密码加密失败，为保护密码已中止登录，请稍后重试或改用教务直接登录")
+                    )
             } else {
+                if (loginPageUrl.scheme != "https") {
+                    return@withContext Result.failure(
+                        IllegalStateException("统一身份认证页面不是安全连接，为保护密码已中止登录，请稍后重试")
+                    )
+                }
                 password
             }
 
@@ -212,7 +233,7 @@ class ZhengFangClient {
 
             // 如果返回 200，说明仍在登录页面（通常提示密码错误或验证码）
             if (postRes.code == 200) {
-                val errHtml = postRes.body?.string().orEmpty()
+                val errHtml = postRes.use { it.body?.string().orEmpty() }
                 val errMatcher = Pattern.compile("id=[\"']?errormes[\"']?[^>]*value=[\"']?([^\"'>]*)[\"']?", Pattern.CASE_INSENSITIVE).matcher(errHtml)
                 val errMsg = if (errMatcher.find()) errMatcher.group(1)?.trim().orEmpty() else ""
                 val errFinal = if (errMsg.isNotBlank()) errMsg else "统一身份认证失败，请检查账号密码"
@@ -247,11 +268,11 @@ class ZhengFangClient {
 
                 val user = User(
                     studentId = username,
-                    name = "青理同学",
+                    name = "",
                     className = "",
                     major = "",
                     grade = "",
-                    campus = "黄岛校区"
+                    campus = ""
                 )
                 Result.success(user)
             } else {
@@ -262,7 +283,7 @@ class ZhengFangClient {
         }
     }
 
-    private fun encryptSsoPassword(password: String, pubKeyPem: String): String {
+    private fun encryptSsoPassword(password: String, pubKeyPem: String): String? {
         return try {
             val cleanKey = pubKeyPem
                 .replace("-----BEGIN PUBLIC KEY-----", "")
@@ -279,12 +300,14 @@ class ZhengFangClient {
             val encrypted = cipher.doFinal(password.toByteArray(Charsets.UTF_8))
             Base64.encodeToString(encrypted, Base64.NO_WRAP)
         } catch (e: Exception) {
-            password
+            // 加密失败必须让调用方感知并中止，绝不能回退成明文密码
+            null
         }
     }
 
     // 抓取全量课表（常规课 kbList + 实践环节 sjkList）
-    suspend fun fetchSchedule(xnm: String = "2026", xqm: String = "3"): Result<List<Course>> = withContext(Dispatchers.IO) {
+    // xnm/xqm 由调用方从用户设置传入（不再写死 2026 / 3，否则下一学年会永远抓到空课表）
+    suspend fun fetchSchedule(xnm: String, xqm: String): Result<List<Course>> = withContext(Dispatchers.IO) {
         try {
             val form = FormBody.Builder()
                 .add("xnm", xnm)
@@ -299,8 +322,7 @@ class ZhengFangClient {
                 .post(form)
                 .build()
 
-            val res = client.newCall(req).execute()
-            val jsonStr = res.body?.string().orEmpty()
+            val jsonStr = client.newCall(req).execute().use { it.body?.string().orEmpty() }
             if (!jsonStr.trim().startsWith("{")) {
                 return@withContext Result.failure(IllegalStateException("课表获取失败，教务系统会话可能已过期"))
             }
@@ -309,6 +331,14 @@ class ZhengFangClient {
             } catch (e: Exception) {
                 null
             } ?: return@withContext Result.failure(IllegalStateException("课表数据格式错误"))
+
+            // 响应里既没有常规课表也没有实践环节 → 这不是预期的课表结构。
+            // 必须报错：否则上层会把「空列表」当成「本学期没课」，从而清空已缓存的课表。
+            if (!root.has("kbList") && !root.has("sjkList")) {
+                return@withContext Result.failure(
+                    IllegalStateException("教务系统未返回课表数据，可能接口已调整或登录已过期")
+                )
+            }
 
             val courses = mutableListOf<Course>()
 
@@ -407,8 +437,7 @@ class ZhengFangClient {
                 .post(form)
                 .build()
 
-            val res = client.newCall(req).execute()
-            val jsonStr = res.body?.string().orEmpty()
+            val jsonStr = client.newCall(req).execute().use { it.body?.string().orEmpty() }
             if (!jsonStr.trim().startsWith("{")) {
                 return@withContext Result.failure(IllegalStateException("成绩获取失败，教务系统会话可能已过期"))
             }
@@ -417,6 +446,13 @@ class ZhengFangClient {
             } catch (e: Exception) {
                 null
             } ?: return@withContext Result.failure(IllegalStateException("成绩数据格式错误"))
+
+            // 既无明细也无总数 → 不是预期结构，报错而不是当作「没有成绩」
+            if (!root.has("items") && !root.has("totalResult")) {
+                return@withContext Result.failure(
+                    IllegalStateException("教务系统未返回成绩数据，可能接口已调整或登录已过期")
+                )
+            }
             val items = root.getAsJsonArray("items")
 
             val grades = mutableListOf<Grade>()
@@ -475,8 +511,7 @@ class ZhengFangClient {
                 .header("Referer", "$BASE_URL/xtgl/index_initMenu.html?jsdm=xs")
                 .get()
                 .build()
-            val mainRes = client.newCall(mainReq).execute()
-            val htmlContent = mainRes.body?.string().orEmpty()
+            val htmlContent = client.newCall(mainReq).execute().use { it.body?.string().orEmpty() }
             if (!htmlContent.contains("alertBox") && !htmlContent.contains("xsxyqk")) {
                 return@withContext Result.failure(IllegalStateException("学业情况获取失败，教务系统会话可能已过期"))
             }
@@ -488,8 +523,7 @@ class ZhengFangClient {
                 .header("Referer", mainUrl)
                 .post(FormBody.Builder().add("xh_id", studentId).build())
                 .build()
-            val kczxRes = client.newCall(kczxReq).execute()
-            val kczxJson = kczxRes.body?.string().orEmpty()
+            val kczxJson = client.newCall(kczxReq).execute().use { it.body?.string().orEmpty() }
 
             val progress = parseAcademicProgress(htmlContent, kczxJson)
             if (progress.overview.officialGpa == 0.0 && progress.modules.isEmpty()) {
@@ -605,7 +639,7 @@ class ZhengFangClient {
 
 
     // 抓取考试安排（包含考场地点与座位号）
-    suspend fun fetchExams(xnm: String = "2026", xqm: String = "3"): Result<List<Exam>> = withContext(Dispatchers.IO) {
+    suspend fun fetchExams(xnm: String, xqm: String): Result<List<Exam>> = withContext(Dispatchers.IO) {
         try {
             val form = FormBody.Builder()
                 .add("xnm", xnm)
@@ -625,8 +659,7 @@ class ZhengFangClient {
                 .post(form)
                 .build()
 
-            val res = client.newCall(req).execute()
-            val jsonStr = res.body?.string().orEmpty()
+            val jsonStr = client.newCall(req).execute().use { it.body?.string().orEmpty() }
             if (!jsonStr.trim().startsWith("{")) {
                 return@withContext Result.failure(IllegalStateException("考试安排获取失败，教务系统会话可能已过期"))
             }
@@ -635,6 +668,13 @@ class ZhengFangClient {
             } catch (e: Exception) {
                 null
             } ?: return@withContext Result.failure(IllegalStateException("考试数据格式错误"))
+
+            // 同上：结构不符时报错，避免「同步成功但清空了考试数据」
+            if (!root.has("items") && !root.has("totalResult")) {
+                return@withContext Result.failure(
+                    IllegalStateException("教务系统未返回考试数据，可能接口已调整或登录已过期")
+                )
+            }
             val items = root.getAsJsonArray("items")
 
             val exams = mutableListOf<Exam>()
@@ -667,16 +707,24 @@ class ZhengFangClient {
 
 // 内存 CookieJar 管理 Session
 private class SimpleCookieJar : CookieJar {
+    private val lock = Any()
     private val cookieStore = mutableListOf<Cookie>()
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-        cookieStore.removeAll { old -> 
-            cookies.any { new -> new.name == old.name && new.domain == old.domain && new.path == old.path } 
+        synchronized(lock) {
+            cookieStore.removeAll { old ->
+                cookies.any { new -> new.name == old.name && new.domain == old.domain && new.path == old.path }
+            }
+            cookieStore.addAll(cookies)
         }
-        cookieStore.addAll(cookies)
     }
 
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
-        return cookieStore.filter { it.matches(url) }
+        val now = System.currentTimeMillis()
+        synchronized(lock) {
+            // 清掉已过期的会话 Cookie，避免拿着失效 Cookie 反复请求
+            cookieStore.removeAll { it.expiresAt < now }
+            return cookieStore.filter { it.matches(url) }
+        }
     }
 }

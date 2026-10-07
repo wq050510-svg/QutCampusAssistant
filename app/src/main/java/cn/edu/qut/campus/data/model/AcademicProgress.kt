@@ -1,5 +1,8 @@
 package cn.edu.qut.campus.data.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class AcademicOverview(
     val studentName: String = "",
     val officialGpa: Double = 0.0,
@@ -16,6 +19,7 @@ data class AcademicOverview(
     val auditTime: String = ""
 )
 
+@Immutable
 data class AcademicModule(
     val name: String,
     val requiredCredits: Double,
@@ -29,6 +33,7 @@ data class AcademicModule(
         get() = if (requiredCredits > 0) ((earnedCredits / requiredCredits) * 100).toFloat().coerceIn(0f, 100f) else 100f
 }
 
+@Immutable
 data class AcademicProgress(
     val overview: AcademicOverview = AcademicOverview(),
     val modules: List<AcademicModule> = emptyList()

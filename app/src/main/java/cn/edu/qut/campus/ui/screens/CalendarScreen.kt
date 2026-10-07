@@ -1,12 +1,18 @@
 package cn.edu.qut.campus.ui.screens
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -18,8 +24,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import cn.edu.qut.campus.data.local.AppPreferences
 import cn.edu.qut.campus.data.repository.ScheduleRepository
 import cn.edu.qut.campus.service.CalendarSyncManager
+import cn.edu.qut.campus.ui.components.readableSyncError
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -32,12 +41,63 @@ fun CalendarScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val syncManager = remember { CalendarSyncManager(context) }
+    val prefs = repository.prefs
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    var selectedReminderMinutes by remember { mutableStateOf(20) }
+    // P1: 本页由 MainNavigation 用 if (showCalendarSync) 切出来，不在返回栈上，
+    // 不拦截系统返回键会直接退出 App。统一交回 onBack()。
+    BackHandler(enabled = true) { onBack() }
+
+    // P1: 提醒时长以 prefs.calendarReminderMinutes 为唯一数据源，选项与「我的」页共用
+    // AppPreferences.REMINDER_OPTIONS；进入页面即读取当前值，点击后立即写回。
+    var selectedReminderMinutes by remember { mutableStateOf(prefs.calendarReminderMinutes) }
     var isSyncing by remember { mutableStateOf(false) }
-    var syncResultMsg by remember { mutableStateOf<String?>(null) }
 
-    val campus = remember { repository.prefs.campus.ifEmpty { "黄岛校区" } }
+    // P1: 校区改用 Flow 驱动，避免组合期快照导致切到市北后本页标题仍显示黄岛
+    val campus = prefs.campusFlow.collectAsStateWithLifecycle().value.ifEmpty { "黄岛校区" }
+
+    // 打开本应用的系统设置页，供权限被拒绝时引导用户手动开启
+    fun openAppSettings() {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", context.packageName, null)
+        )
+        runCatching { context.startActivity(intent) }
+    }
+
+    // 写回唯一数据源：CalendarSyncManager 与「我的」页读到的都是这个值
+    fun applyReminderMinutes(minutes: Int) {
+        selectedReminderMinutes = minutes
+        prefs.calendarReminderMinutes = minutes
+    }
+
+    // 权限已就绪时真正执行写入
+    fun performCalendarSync() {
+        if (isSyncing) return
+        scope.launch {
+            isSyncing = true
+            try {
+                val courses = repository.coursesFlow.first()
+                val minutes = prefs.calendarReminderMinutes
+                val result = syncManager.syncCoursesToCalendar(
+                    courses,
+                    reminderMinutes = minutes,
+                    campus = campus
+                )
+                if (result.isSuccess) {
+                    snackbarHostState.showSnackbar(
+                        "同步成功！已将 ${result.getOrNull()} 节${campus}课程写入手机日历，并开启提前 ${minutes} 分钟提醒"
+                    )
+                } else {
+                    snackbarHostState.showSnackbar("同步失败：${readableSyncError(result.exceptionOrNull())}")
+                }
+            } catch (e: Exception) {
+                snackbarHostState.showSnackbar("同步失败：${readableSyncError(e)}")
+            } finally {
+                isSyncing = false
+            }
+        }
+    }
 
     // 运行时日历权限请求器
     val calendarPermissionLauncher = rememberLauncherForActivityResult(
@@ -46,19 +106,19 @@ fun CalendarScreen(
         val granted = permissions[Manifest.permission.READ_CALENDAR] == true &&
                       permissions[Manifest.permission.WRITE_CALENDAR] == true
         if (granted) {
+            performCalendarSync()
+        } else {
             scope.launch {
-                isSyncing = true
-                val courses = repository.coursesFlow.first()
-                val result = syncManager.syncCoursesToCalendar(courses, reminderMinutes = selectedReminderMinutes, campus = campus)
-                isSyncing = false
-                syncResultMsg = if (result.isSuccess) {
-                    "同步成功！已将 ${result.getOrNull()} 节${campus}课程写入手机日历，并开启提前 ${selectedReminderMinutes} 分钟提醒！"
-                } else {
-                    "同步失败：${result.exceptionOrNull()?.message}"
+                val action = snackbarHostState.showSnackbar(
+                    message = "未获得日历读写权限，无法把课表写入手机日历",
+                    actionLabel = "去设置",
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Long
+                )
+                if (action == SnackbarResult.ActionPerformed) {
+                    openAppSettings()
                 }
             }
-        } else {
-            syncResultMsg = "请在系统设置中允许日历读写权限，以便将课程写入手机日历"
         }
     }
 
@@ -72,12 +132,15 @@ fun CalendarScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                // P2: 内容总高超过 600dp，小屏/大字体下不加纵向滚动会导致底部按钮被裁掉
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -149,15 +212,20 @@ fun CalendarScreen(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                listOf(15, 20, 30, 45).forEach { min ->
-                    val isSelected = selectedReminderMinutes == min
+                // P1: 与「我的」页共用 AppPreferences.REMINDER_OPTIONS，杜绝两套选项互相覆盖
+                AppPreferences.REMINDER_OPTIONS.forEach { min ->
                     FilterChip(
-                        selected = isSelected,
-                        onClick = { selectedReminderMinutes = min },
-                        label = { Text("提前 $min 分钟") },
-                        shape = RoundedCornerShape(8.dp)
+                        selected = selectedReminderMinutes == min,
+                        onClick = { applyReminderMinutes(min) },
+                        label = {
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text("$min 分钟", fontSize = 11.sp, maxLines = 1)
+                            }
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
@@ -170,17 +238,7 @@ fun CalendarScreen(
                     val readCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR)
                     val writeCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR)
                     if (readCheck == PackageManager.PERMISSION_GRANTED && writeCheck == PackageManager.PERMISSION_GRANTED) {
-                        scope.launch {
-                            isSyncing = true
-                            val courses = repository.coursesFlow.first()
-                            val result = syncManager.syncCoursesToCalendar(courses, reminderMinutes = selectedReminderMinutes, campus = campus)
-                            isSyncing = false
-                            syncResultMsg = if (result.isSuccess) {
-                                "同步成功！已将 ${result.getOrNull()} 节${campus}课程排入系统日历，设置提前 ${selectedReminderMinutes} 分钟提醒！"
-                            } else {
-                                "同步失败：${result.exceptionOrNull()?.message}"
-                            }
-                        }
+                        performCalendarSync()
                     } else {
                         calendarPermissionLauncher.launch(
                             arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
@@ -210,8 +268,12 @@ fun CalendarScreen(
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        syncManager.clearCalendar(campus)
-                        syncResultMsg = "已成功清空系统日历中的青理课表日程"
+                        try {
+                            syncManager.clearCalendar(campus)
+                            snackbarHostState.showSnackbar("已成功清空系统日历中的青理课表日程")
+                        } catch (e: Exception) {
+                            snackbarHostState.showSnackbar("清空失败：${readableSyncError(e)}")
+                        }
                     }
                 },
                 modifier = Modifier
@@ -222,19 +284,8 @@ fun CalendarScreen(
                 Text("清空已同步的日历课表")
             }
 
-            if (syncResultMsg != null) {
-                Spacer(modifier = Modifier.height(20.dp))
-                AlertDialog(
-                    onDismissRequest = { syncResultMsg = null },
-                    confirmButton = {
-                        TextButton(onClick = { syncResultMsg = null }) {
-                            Text("知道了")
-                        }
-                    },
-                    title = { Text("日历同步结果") },
-                    text = { Text(syncResultMsg!!) }
-                )
-            }
+            // 底部留白，配合 verticalScroll 保证小屏也能完整看到最后一个按钮
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }

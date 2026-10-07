@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      深色（夜间）主题：同名覆盖 values/themes.xml，保证 android:theme="@style/Theme.QutCampusAssistant"
+      在深色下解析到这一份，从而让窗口背景与 Compose 的 AMOLED 纯黑配色一致，消除启动闪白。
+    -->
+    <style name="Theme.QutCampusAssistant" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

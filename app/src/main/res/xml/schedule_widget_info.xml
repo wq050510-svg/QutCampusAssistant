@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  updatePeriodMillis = 1800000（30 分钟）是系统允许的最小周期，无法再调小。
+  跨零点后的及时刷新不依赖它：ScheduleWidgetProvider 通过清单里的
+  android.intent.action.DATE_CHANGED / TIME_SET / TIMEZONE_CHANGED 接收系统广播，
+  收到后把展示偏移重置为「今日」并重绘全部实例。
+-->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="250dp"
     android:minHeight="120dp"

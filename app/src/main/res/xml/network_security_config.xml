@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置：
+  - 默认禁止明文流量（教务系统与统一身份认证均为 https）
+  - 仅对 qut.edu.cn 保留明文兜底，用于个别仍走 http 的校园子站
+  - 不再信任用户安装的 CA 证书：之前信任 user 证书时，任何人装一张自签证书
+    就能中间人解密登录请求（学号 + 教务密码）
+-->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
-            <certificates src="user" />
         </trust-anchors>
     </base-config>
     <domain-config cleartextTrafficPermitted="true">

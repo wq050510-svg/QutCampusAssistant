@@ -1,5 +1,13 @@
 package cn.edu.qut.campus.data.model
 
+import androidx.compose.runtime.Immutable
+
+/** 明确的挂科、未通过、缺考或违纪关键字（提到文件级：避免每次读取 isPassed 都重建列表） */
+private val FAIL_KEYWORDS = listOf(
+    "不及格", "不合格", "未通过", "缺考", "作弊", "违纪", "不达标", "缓考", "F"
+)
+
+@Immutable
 data class Grade(
     val id: String,
     val courseName: String,
@@ -18,8 +26,7 @@ data class Grade(
             val s = score.trim()
             if (s.isEmpty()) return false
             // 明确的挂科、未通过、缺考或违纪关键字
-            val failKeywords = listOf("不及格", "不合格", "未通过", "缺考", "作弊", "违纪", "不达标", "缓考", "F")
-            if (failKeywords.any { s.contains(it, ignoreCase = true) }) {
+            if (FAIL_KEYWORDS.any { s.contains(it, ignoreCase = true) }) {
                 return false
             }
             // 若为纯数字格式成绩

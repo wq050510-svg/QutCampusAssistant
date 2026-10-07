@@ -1,7 +1,5 @@
 package cn.edu.qut.campus.ui.screens
 
-import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -18,7 +16,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -26,19 +23,46 @@ import cn.edu.qut.campus.data.model.AcademicModule
 import cn.edu.qut.campus.data.model.AcademicProgress
 import cn.edu.qut.campus.data.model.Grade
 import cn.edu.qut.campus.data.repository.ScheduleRepository
-import kotlinx.coroutines.delay
 import cn.edu.qut.campus.QutApplication
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import java.util.Locale
+
+/**
+ * 学业数据展示约定：**只展示真实抓取到的数据**。
+ * 教务接口未返回的字段一律显示占位符，绝不使用看似合理的默认值填充，
+ * 否则学生会把编造的 GPA / 学分当成自己的真实学业情况。
+ */
+private const val NO_DATA = "—"
+
+private fun gpaText(value: Double?): String =
+    if (value == null || value <= 0.0) NO_DATA else String.format(Locale.US, "%.2f", value)
+
+private fun creditText(value: Double?): String =
+    if (value == null || value <= 0.0) NO_DATA else String.format(Locale.US, "%.1f", value)
+
+/** 同步学业数据：成功返回 null，失败返回可直接展示给用户的原因 */
+private suspend fun syncAcademicOrNull(repository: ScheduleRepository): String? = try {
+    repository.syncAcademicProgress().exceptionOrNull()
+        ?.let { it.message?.takeIf { m -> m.isNotBlank() } ?: "会话可能已过期，请退出后重新登录" }
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    e.message?.takeIf { it.isNotBlank() } ?: "网络异常，请稍后重试"
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AcademicScreen(repository: ScheduleRepository) {
-    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val prefs = remember { QutApplication.instance.preferences }
-    val academicProgress by repository.academicProgressFlow.collectAsState()
-    val allGrades by repository.gradesFlow.collectAsState(initial = emptyList())
+    val campus by prefs.campusFlow.collectAsStateWithLifecycle()
+    val academicProgress by repository.academicProgressFlow.collectAsStateWithLifecycle()
+    val allGrades by repository.gradesFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     var isRefreshing by remember { mutableStateOf(false) }
+    var syncError by remember { mutableStateOf<String?>(null) }
 
     // 动态提取未通过的课程列表（基于去重后的真实有效记录）
     val dedupedGrades = remember(allGrades) { Grade.deduplicateGrades(allGrades) }
@@ -46,13 +70,12 @@ fun AcademicScreen(repository: ScheduleRepository) {
         dedupedGrades.filter { !it.isPassed && it.credit > 0 }
     }
 
+    // 只统计真实成绩记录：拿不到就显示占位符，不再回退到写死的数字
     val compulsoryCredits = remember(dedupedGrades) {
-        val c = dedupedGrades.filter { it.isPassed && !it.courseType.contains("选修") }.sumOf { it.credit }
-        if (c > 0) c else 140.9
+        dedupedGrades.filter { it.isPassed && !it.courseType.contains("选修") }.sumOf { it.credit }
     }
     val electiveCredits = remember(dedupedGrades) {
-        val c = dedupedGrades.filter { it.isPassed && it.courseType.contains("选修") }.sumOf { it.credit }
-        if (c > 0) c else 7.0
+        dedupedGrades.filter { it.isPassed && it.courseType.contains("选修") }.sumOf { it.credit }
     }
 
     // 模块平台筛选标签
@@ -69,22 +92,24 @@ fun AcademicScreen(repository: ScheduleRepository) {
         }
     }
 
-    // 首次进入自动尝试拉取
+    // 首次进入自动尝试拉取；失败必须让用户看得见，而不是静默吞掉
     LaunchedEffect(Unit) {
-        delay(400)
         if (academicProgress == null) {
-            try {
-                isRefreshing = true
-                repository.syncAcademicProgress()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            } finally {
-                isRefreshing = false
-            }
+            isRefreshing = true
+            syncError = syncAcademicOrNull(repository)
+            isRefreshing = false
+        }
+    }
+
+    LaunchedEffect(syncError) {
+        syncError?.let {
+            snackbarHostState.showSnackbar("学业数据同步失败：$it")
+            syncError = null
         }
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -97,18 +122,13 @@ fun AcademicScreen(repository: ScheduleRepository) {
                     IconButton(
                         onClick = {
                             coroutineScope.launch {
-                                try {
-                                    isRefreshing = true
-                                    val res = repository.syncAcademicProgress()
-                                    if (res.isSuccess) {
-                                        Toast.makeText(context, "学业情况同步成功", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, "同步失败: ${res.exceptionOrNull()?.localizedMessage}", Toast.LENGTH_SHORT).show()
-                                    }
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "同步失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
-                                } finally {
-                                    isRefreshing = false
+                                isRefreshing = true
+                                val error = syncAcademicOrNull(repository)
+                                isRefreshing = false
+                                if (error == null) {
+                                    snackbarHostState.showSnackbar("学业情况已同步")
+                                } else {
+                                    syncError = error
                                 }
                             }
                         },
@@ -156,18 +176,13 @@ fun AcademicScreen(repository: ScheduleRepository) {
                     Button(
                         onClick = {
                             coroutineScope.launch {
-                                try {
-                                    isRefreshing = true
-                                    val res = repository.syncAcademicProgress()
-                                    if (res.isSuccess) {
-                                        Toast.makeText(context, "学业情况同步成功", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, "同步失败: ${res.exceptionOrNull()?.localizedMessage}", Toast.LENGTH_SHORT).show()
-                                    }
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "同步失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
-                                } finally {
-                                    isRefreshing = false
+                                isRefreshing = true
+                                val error = syncAcademicOrNull(repository)
+                                isRefreshing = false
+                                if (error == null) {
+                                    snackbarHostState.showSnackbar("学业情况已同步")
+                                } else {
+                                    syncError = error
                                 }
                             }
                         }
@@ -228,7 +243,7 @@ fun AcademicScreen(repository: ScheduleRepository) {
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "${prefs.campus.ifEmpty { "黄岛校区" }} • 培养方案指导教学计划",
+                                text = "${campus.ifEmpty { "黄岛校区" }} • 培养方案指导教学计划",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -270,7 +285,7 @@ fun AcademicScreen(repository: ScheduleRepository) {
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = String.format("%.2f", overview?.officialGpa ?: 2.68),
+                                    text = gpaText(overview?.officialGpa),
                                     fontSize = 38.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = MaterialTheme.colorScheme.primary
@@ -283,7 +298,7 @@ fun AcademicScreen(repository: ScheduleRepository) {
                                 modifier = Modifier.padding(top = 4.dp)
                             ) {
                                 Text(
-                                    text = "官方权威数据",
+                                    text = if ((overview?.officialGpa ?: 0.0) > 0.0) "教务系统数据" else "暂无数据",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.primary,
@@ -304,12 +319,16 @@ fun AcademicScreen(repository: ScheduleRepository) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("必修课 GPA", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
                                 Text(
-                                    text = String.format("%.2f", overview?.compulsoryGpa ?: 2.57),
+                                    text = gpaText(overview?.compulsoryGpa),
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary
                                 )
-                                Text("已获 ${String.format("%.1f", compulsoryCredits)} 学分", fontSize = 10.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+                                Text(
+                                    text = if (dedupedGrades.isEmpty()) "成绩数据待同步" else "已获 ${creditText(compulsoryCredits)} 学分",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                )
                             }
                             VerticalDivider(
                                 modifier = Modifier
@@ -320,12 +339,16 @@ fun AcademicScreen(repository: ScheduleRepository) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("选修课 GPA", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
                                 Text(
-                                    text = String.format("%.2f", overview?.electiveGpa ?: 4.29),
+                                    text = gpaText(overview?.electiveGpa),
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary
                                 )
-                                Text("已获 ${String.format("%.1f", electiveCredits)} 学分", fontSize = 10.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+                                Text(
+                                    text = if (dedupedGrades.isEmpty()) "成绩数据待同步" else "已获 ${creditText(electiveCredits)} 学分",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                )
                             }
                         }
                     }
@@ -344,10 +367,11 @@ fun AcademicScreen(repository: ScheduleRepository) {
                             .fillMaxWidth()
                             .padding(16.dp)
                     ) {
-                        val earned = overview?.totalEarnedCredits ?: 147.9
-                        val total = overview?.totalRequiredCredits ?: 175.0
-                        val remaining = overview?.totalRemainingCredits ?: 27.1
-                        val progress = if (total > 0) (earned / total).toFloat().coerceIn(0f, 1f) else 0.85f
+                        val earned = overview?.totalEarnedCredits ?: 0.0
+                        val total = overview?.totalRequiredCredits ?: 0.0
+                        val remaining = overview?.totalRemainingCredits ?: 0.0
+                        val hasCreditPlan = total > 0.0
+                        val progress = if (hasCreditPlan) (earned / total).toFloat().coerceIn(0f, 1f) else 0f
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -356,7 +380,7 @@ fun AcademicScreen(repository: ScheduleRepository) {
                         ) {
                             Text("毕业学分总进度", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             Text(
-                                text = "${String.format("%.1f", earned)} / ${String.format("%.1f", total)} 学分",
+                                text = if (hasCreditPlan) "${creditText(earned)} / ${creditText(total)} 学分" else NO_DATA,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontSize = 14.sp
@@ -377,20 +401,28 @@ fun AcademicScreen(repository: ScheduleRepository) {
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
+                        if (hasCreditPlan) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "完成率: ${String.format(Locale.US, "%.1f", progress * 100)}%",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "尚欠: ${creditText(remaining)} 学分",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (remaining > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        } else {
                             Text(
-                                text = "完成率: ${String.format("%.1f", progress * 100)}%",
+                                text = "教务系统未返回毕业学分要求，请点击右上角刷新重试",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "尚欠: ${String.format("%.1f", remaining)} 学分",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (remaining > 0) Color(0xFFE65100) else MaterialTheme.colorScheme.primary
                             )
                         }
                     }
@@ -407,23 +439,26 @@ fun AcademicScreen(repository: ScheduleRepository) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("课程修读门数概览", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         Spacer(modifier = Modifier.height(12.dp))
+                        val planned = overview?.totalPlannedCourses ?: 0
+                        val hasPlanCount = planned > 0
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            CourseStatBox("计划总门数", "${overview?.totalPlannedCourses ?: 184}", MaterialTheme.colorScheme.onSurface)
-                            CourseStatBox("已通过", "${overview?.passedCourses ?: 83}", Color(0xFF2E7D32))
-                            CourseStatBox("未通过", "${overview?.failedCourses ?: 3}", Color(0xFFD32F2F))
-                            CourseStatBox("在读", "${overview?.studyingCourses ?: 3}", Color(0xFF1976D2))
-                            CourseStatBox("未修", "${overview?.unstudiedCourses ?: 95}", MaterialTheme.colorScheme.onSurfaceVariant)
+                            CourseStatBox("计划总门数", if (hasPlanCount) "$planned" else NO_DATA, MaterialTheme.colorScheme.onSurface)
+                            CourseStatBox("已通过", if (hasPlanCount) "${overview?.passedCourses ?: 0}" else NO_DATA, MaterialTheme.colorScheme.primary)
+                            CourseStatBox("未通过", if (hasPlanCount) "${overview?.failedCourses ?: 0}" else NO_DATA, MaterialTheme.colorScheme.error)
+                            CourseStatBox("在读", if (hasPlanCount) "${overview?.studyingCourses ?: 0}" else NO_DATA, MaterialTheme.colorScheme.tertiary)
+                            CourseStatBox("未修", if (hasPlanCount) "${overview?.unstudiedCourses ?: 0}" else NO_DATA, MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
             }
 
             // 5. 待补考/重修科目预警区 (高优展示)
+            // 只依据真实成绩记录判断，不再用官方门数字段兜底、也不再编造挂科名单
             item {
-                val failCount = overview?.failedCourses ?: 3
+                val failCount = unpassedCourses.size
                 if (failCount > 0) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -460,18 +495,8 @@ fun AcademicScreen(repository: ScheduleRepository) {
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            // 列出具体未通过的课程
-                            val listToShow = if (unpassedCourses.isNotEmpty()) {
-                                unpassedCourses
-                            } else {
-                                listOf(
-                                    Grade("1", "建筑制图上", "27", 27.0, 0.0, 2.5, "必修", "2023-2024", "1", "正常考试"),
-                                    Grade("2", "结构力学A上", "18", 18.0, 0.0, 4.0, "必修", "2025-2026", "1", "正常考试"),
-                                    Grade("3", "结构力学A下", "36", 36.0, 0.0, 3.0, "必修", "2025-2026", "2", "正常考试")
-                                )
-                            }
-
-                            listToShow.forEach { grade ->
+                            // 列出具体未通过的课程（全部来自本地真实成绩记录）
+                            unpassedCourses.forEach { grade ->
                                 Surface(
                                     modifier = Modifier
                                         .fillMaxWidth()

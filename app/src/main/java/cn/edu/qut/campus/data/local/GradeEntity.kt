@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Transaction
 import cn.edu.qut.campus.data.model.Grade
 import kotlinx.coroutines.flow.Flow
 
@@ -45,4 +46,11 @@ interface GradeDao {
 
     @Query("DELETE FROM grades")
     suspend fun clearAll()
+
+    /** 清空 + 写入置于同一事务，避免中途失败清空成绩 */
+    @Transaction
+    suspend fun replaceAll(grades: List<GradeEntity>) {
+        clearAll()
+        insertGrades(grades)
+    }
 }

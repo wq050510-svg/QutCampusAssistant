@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Transaction
 import cn.edu.qut.campus.data.model.Course
 import kotlinx.coroutines.flow.Flow
 
@@ -78,4 +79,14 @@ interface CourseDao {
 
     @Query("DELETE FROM courses")
     suspend fun clearAll()
+
+    /**
+     * 清空后整体写入，两步必须在同一事务内：
+     * 否则中途失败（进程被杀/磁盘满）会留下空表，用户离线打开课表就是一片空白。
+     */
+    @Transaction
+    suspend fun replaceAll(courses: List<CourseEntity>) {
+        clearAll()
+        insertCourses(courses)
+    }
 }
