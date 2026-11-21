@@ -1,7 +1,7 @@
 # 青理校园助手 (QUT Campus Assistant)
 > 专为青岛理工大学学生定制的现代化校园综合服务 App（支持 Android 8.0+ 及现代 Material You）
 
-当前版本：**v1.3.2**（versionCode 6）｜ 详见 [RELEASE_NOTES_v1.3.2.md](RELEASE_NOTES_v1.3.2.md)（v1.3.1 / v1.3.0 见同目录发布日志）
+当前版本：**v1.3.2**（versionCode 6）｜ 详见 [RELEASE_NOTES_v1.3.2.md](docs/releases/RELEASE_NOTES_v1.3.2.md)（全部历史更新见 [docs/releases/](docs/releases/) 与 [GitHub Releases](https://github.com/wq050510-svg/QutCampusAssistant/releases)）
 
 ---
 
@@ -74,9 +74,12 @@ QutCampusAssistant/
  │    │    └── res/                          # 图标（自适应 launcher）、小组件布局、主题、字符串
  │    ├── build.gradle.kts                   # App 模块构建脚本（R8/资源压缩/签名）
  │    └── proguard-rules.pro                 # R8 keep 规则（Gson/Room/AppWidget）
+ ├── docs/
+ │    ├── MANUAL_TEST_CHECKLIST.md             # 小组件 / 系统日历联动的真机手测清单
+ │    └── releases/                            # 各版本发布日志
  ├── gradle/libs.versions.toml                # 统一依赖版本库
  ├── keystore.properties                      # 正式签名凭据（可选，已在 .gitignore 中）
- ├── MANUAL_TEST_CHECKLIST.md                  # 小组件 / 系统日历联动的真机手测清单
+ ├── LICENSE                                  # MIT 开源协议
  ├── build.gradle.kts / settings.gradle.kts
  └── gradle.properties                        # Gradle 性能与 R8 开关
 ```
@@ -126,3 +129,8 @@ keyPassword=你的key密码
 ## 免责声明
 本应用为**非官方**的第三方工具，仅用于个人便捷查询自己的课表、成绩与考试信息；所有数据均实时来自学校教务系统，最终以教务系统为准。
 账号密码仅用于在本机直连学校系统，不会上传到任何第三方服务器；退出登录会清除本地全部缓存与凭据。
+
+---
+
+## 开源协议
+本项目基于 [MIT License](LICENSE) 开源。
